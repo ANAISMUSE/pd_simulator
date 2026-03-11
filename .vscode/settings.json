@@ -1,0 +1,13 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}\\backend"  // ← 关键：添加 backend 到搜索路径
+  ],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.diagnosticMode": "workspace",
+  "python.languageServer": "None",
+  "basedpyright.analysis.extraPaths": [
+    "${workspaceFolder}\\backend"  // ← 也要添加到 basedpyright
+  ]
+}

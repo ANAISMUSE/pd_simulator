@@ -1,0 +1,234 @@
+[
+  {
+    "params": {
+      "transport_type": "average",
+      "fill_volume": 1500,
+      "exchange_time": 60
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0016791532453644558,
+        "max_abs_err": 0.005321071286227941,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 4.7731047469613825e-05,
+        "max_abs_err": 0.00015458020182224086,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.0314934623592249,
+        "max_abs_err": 0.16281552407562572,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.04702045203409799,
+        "max_abs_err": 0.25938391610975486,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "average",
+      "fill_volume": 1500,
+      "exchange_time": 90
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0016791532453644558,
+        "max_abs_err": 0.005321071286227941,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 4.7731047469613825e-05,
+        "max_abs_err": 0.00015458020182224086,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.0314934623592249,
+        "max_abs_err": 0.16281552407562572,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.04702045203409799,
+        "max_abs_err": 0.25938391610975486,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "average",
+      "fill_volume": 2000,
+      "exchange_time": 60
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0005207618069729173,
+        "max_abs_err": 0.0019042833751887756,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 1.4198612671179755e-05,
+        "max_abs_err": 5.3606556641383474e-05,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.025194284589419524,
+        "max_abs_err": 0.041330399701280385,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.03804555623922212,
+        "max_abs_err": 0.06552155012792582,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "average",
+      "fill_volume": 2000,
+      "exchange_time": 90
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0005207618069729173,
+        "max_abs_err": 0.0019042833751887756,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 1.4198612671179755e-05,
+        "max_abs_err": 5.3606556641383474e-05,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.025194284589419524,
+        "max_abs_err": 0.041330399701280385,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.03804555623922212,
+        "max_abs_err": 0.06552155012792582,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "fast",
+      "fill_volume": 1500,
+      "exchange_time": 60
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0036788135497433944,
+        "max_abs_err": 0.013260976131823199,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 0.00011065767435693811,
+        "max_abs_err": 0.0004130266569497554,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.03364137789365884,
+        "max_abs_err": 0.16991137391636357,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.05442173357909752,
+        "max_abs_err": 0.2713246242004743,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "fast",
+      "fill_volume": 1500,
+      "exchange_time": 90
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0036788135497433944,
+        "max_abs_err": 0.013260976131823199,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 0.00011065767435693811,
+        "max_abs_err": 0.0004130266569497554,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.03364137789365884,
+        "max_abs_err": 0.16991137391636357,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.05442173357909752,
+        "max_abs_err": 0.2713246242004743,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "fast",
+      "fill_volume": 2000,
+      "exchange_time": 60
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0009281479098491058,
+        "max_abs_err": 0.003907544530092011,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 2.5987569610835415e-05,
+        "max_abs_err": 0.00011465147215503069,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.02320131255523039,
+        "max_abs_err": 0.04401074287909523,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.033782497908454445,
+        "max_abs_err": 0.06973306829468129,
+        "samples": 32
+      }
+    }
+  },
+  {
+    "params": {
+      "transport_type": "fast",
+      "fill_volume": 2000,
+      "exchange_time": 90
+    },
+    "stats": {
+      "urea": {
+        "mean_abs_err": 0.0009281479098491058,
+        "max_abs_err": 0.003907544530092011,
+        "samples": 32
+      },
+      "creatinine": {
+        "mean_abs_err": 2.5987569610835415e-05,
+        "max_abs_err": 0.00011465147215503069,
+        "samples": 32
+      },
+      "glucose": {
+        "mean_abs_err": 0.02320131255523039,
+        "max_abs_err": 0.04401074287909523,
+        "samples": 32
+      },
+      "sodium": {
+        "mean_abs_err": 0.033782497908454445,
+        "max_abs_err": 0.06973306829468129,
+        "samples": 32
+      }
+    }
+  }
+]

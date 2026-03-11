@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PD Simulator Input",
+  "type": "object",
+  "properties": {
+    "patient": {
+      "type": "object",
+      "properties": {
+        "age": {"type": ["integer", "null"]},
+        "weight": {"type": ["number", "null"]},
+        "pet_d_p_crea": {"type": ["number", "null"]},
+        "plasma_values": {
+          "type": "object",
+          "additionalProperties": {"type": ["number", "null"]}
+        }
+      },
+      "required": ["age", "weight", "pet_d_p_crea", "plasma_values"]
+    },
+    "regimen": {
+      "type": "object",
+      "properties": {
+        "transport_type": {"type": ["string", "null"], "enum": ["fast", "average", "slow", null]},
+        "fill_volume": {"type": ["integer", "null"]},
+        "exchange_time": {"type": ["integer", "null"]}
+      },
+      "required": ["transport_type", "fill_volume", "exchange_time"]
+    }
+  },
+  "required": ["patient", "regimen"]
+}

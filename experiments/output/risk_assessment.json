@@ -1,0 +1,35 @@
+[
+  {
+    "regimen": {
+      "transport_type": "average",
+      "fill_volume": 2000,
+      "exchange_time": 60
+    },
+    "risk": {
+      "risk": false,
+      "reasons": []
+    }
+  },
+  {
+    "regimen": {
+      "transport_type": "fast",
+      "fill_volume": 2500,
+      "exchange_time": 45
+    },
+    "risk": {
+      "risk": false,
+      "reasons": []
+    }
+  },
+  {
+    "regimen": {
+      "transport_type": "slow",
+      "fill_volume": 1500,
+      "exchange_time": 120
+    },
+    "risk": {
+      "risk": false,
+      "reasons": []
+    }
+  }
+]

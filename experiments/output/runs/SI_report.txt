@@ -1,0 +1,145 @@
+SI Report — Supplementary Information for PD simulator runs
+Generated: 2025-12
+
+目的：
+- 本文档为实验数据的补充说明（SI），记录了随机生成输入运行的保存格式、字段定义、数据收集流程，以及 3 组示例运行的截取，用于论文的补充材料或复现说明。
+
+一、数据收集流程（简述）
+- 使用 `experiments/collect_data.py` 的 `--random` 模式生成 N 组运行。每组运行将：
+  - 随机种子记录在 `seed` 字段；
+  - 规范化输入（`input`）保存为 JSON 中的 `input` 子段；
+  - 仿真结果的时间序列以压缩数组保存为 `.npz`，路径记录在 `time_series_path`；
+  - 每组的统计汇总写入 `summary` 字段（包含体积与溶质统计）；
+  - 同时生成聚合表 `runs_summary.csv` 与 `runs_summary.json`，以及 `summary_report.txt`。
+
+二、收集数据的含义意义解释:文件与字段说明
+id:	运行编号	关联聚合数据与单组run_000X.json详细数据，实现汇总与明细的联动查询
+seed	:随机种子	聚合层面保留复现标识，支持批量验证多组模拟的可复现性
+tp:	溶质转运类型（对应input.regimen.transport_type）	快速分类聚合不同转运类型的模拟结果，对比分析转运模式对透析效果的影响
+fill_volume:	透析液填充体积（对应input.regimen.fill_volume）	聚合分析填充体积与腹膜腔体积、溶质清除的关联规律，为透析方案优化提供批量数据支撑
+exchange_time:	透析交换时间（对应input.regimen.exchange_time）	批量统计不同交换时间下的模拟效率与疗效，筛选最优时间参数
+elapsed_sec:	仿真消耗壁钟时间	汇总模拟系统的整体耗时分布，评估批量模拟的计算成本，指导算力资源分配
+V_max/V_min/V_mean:	腹膜腔体积极大值 / 极小值 / 平均值	核心疗效指标的聚合统计，快速对比多组模拟的腹膜容量稳定性，识别方案参数对体积的影响规律
+
+三、采集的统计表（来自 `runs_summary.csv`）
+
+id	seed	tp	fill_volume	exchange_time	elapsed_sec	V_max	V_min	V_mean
+1	58947507	fast	1000	60	0.05630509999999944	1563.036941294737	746.6784791136425	1162.8919453320163
+2	58949812	fast	1500	45	0.06037990000000093	2560.7810386393753	1500.0	2151.5073833759648
+3	58949879	slow	2500	30	0.07601290000000205	4616.433806525583	2500.0	3646.764504628114
+4	58949962	fast	1000	45	0.0893884000000007	1500.9888143324129	577.5453280303043	1078.857770559782
+5	58950063	fast	3000	30	0.10910700000000162	4862.518946647465	3000.0	3873.41513648521
+
+四、示例截取（3 组）
+
+示例 A — `run_0001.json`（id=1）
+{
+  "id": 1,
+  "seed": 58947507,
+  "input": {
+    "patient": { "age": 67, "weight": 109.45, "pet_d_p_crea": 0.8634,
+      "plasma_values": { "urea": 28.20, "creatinine": 0.6776, "glucose": 4.761, "sodium": 102.04 }
+    },
+    "regimen": { "transport_type": "fast", "fill_volume": 1000, "exchange_time": 60 }
+  },
+  "summary": { "duration_min": 15.0, "V_max": 1563.037, "V_min": 746.678, "V_mean": 1162.892,
+    "solutes": { "urea": {"final": 13.4638, "mean": 5.1743, "std": 4.0168},
+                 "creatinine": {"final": 0.2061, "mean": 0.0772} }
+  },
+  "time_series_path": "output\\runs\\run_0001.npz",
+  "validation_valid": true
+}
+
+示例 B — `run_0002.json`（id=2）
+{
+  "id": 2,
+  "seed": 58949812,
+  "input": {
+    "patient": { "age": 71, "weight": 84.05, "pet_d_p_crea": 0.8692,
+      "plasma_values": { "urea": 17.3856, "creatinine": 1.1270, "glucose": 7.5102, "sodium": 174.523 }
+    },
+    "regimen": { "transport_type": "fast", "fill_volume": 1500, "exchange_time": 45 }
+  },
+  "summary": { "duration_min": 15.0, "V_max": 2560.781, "V_min": 1500.0, "V_mean": 2151.507 },
+  "time_series_path": "output\\runs\\run_0002.npz",
+  "validation_valid": true
+}
+
+示例 C — `run_0003.json`（id=3）
+{
+  "id": 3,
+  "seed": 58949879,
+  "input": {
+    "patient": { "age": 49, "weight": 106.59, "pet_d_p_crea": 0.5166,
+      "plasma_values": { "urea": 23.5665, "creatinine": 0.6040, "glucose": 4.4655, "sodium": 157.451 }
+    },
+    "regimen": { "transport_type": "slow", "fill_volume": 2500, "exchange_time": 30 }
+  },
+  "summary": { "duration_min": 15.0, "V_max": 4616.434, "V_min": 2500.0, "V_mean": 3646.765 },
+  "time_series_path": "output\\runs\\run_0003.npz",
+  "validation_valid": true
+}
+
+五、数据说明与注意事项
+- `.npz` 文件包含至少一个时间向量 `t`（分钟）和下列数组：`V_D`（腹膜腔体积, mL），以及各溶质的时间序列（键名例如 `urea`, `creatinine`, `glucose`, `sodium`, `beta2m`, `albumin`）。
+- 校验：若系统环境安装了 `jsonschema`，代码会使用 `experiments/input_schema.json` 进行严格校验；否则使用轻量字段存在性检查。生成文件中的 `validation_valid` 字段反映校验结果。
+- 随机性：每次运行记录 `seed`，可通过设置该 seed 在 `collect_data.py` 中重播相同输入。
+- 单次仿真消耗时间（`elapsed_sec`）在不同参数与 `dt` 下有显著差异；聚合表给出每次的壁钟时间，便于评估采样成本。
+
+关于如何收集数据:
+上述数据的收集需依托脚本自动化执行 + 分层数据处理，整体流程可分为准备阶段、核心收集阶段、校验与归档阶段，具体步骤如下（附实操细节）：
+
+准备阶段：环境与脚本就绪
+环境配置
+确保 PD 模拟系统的核心代码（含仿真逻辑、数据输出模块）已部署，安装依赖库（如numpy用于.npz 文件生成、jsonschema用于输入校验、pandas用于 CSV 聚合）；
+确认experiments/input_schema.json（输入校验规则文件）已配置完成（定义病人参数、方案参数的合法范围与格式）。
+脚本参数预设
+编辑experiments/collect_data.py脚本，预设关键参数：
+模拟总时长（total_time，如 15 分钟，对应腹膜透析单次治疗周期）；
+时间步长（dt，如 0.02 分钟，控制仿真精度）；
+随机运行组数（N，如 5 组，决定数据量）；
+输出目录（固定为experiments/output/runs/，确保路径可读写）。
+
+核心收集阶段：自动化运行与数据分层捕获
+步骤 1：执行随机输入生成与仿真脚本
+在工作区根目录通过命令行启动收集流程（PowerShell / 终端）：
+powershell
+# 生成5组随机输入的PD模拟运行，时间步长0.02，总仿真时间15分钟
+python .\experiments\collect_data.py --random 5 --dt 0.02 --total_time 15.0
+脚本启动后，自动执行以下子步骤（单组运行为例）：
+步骤 2：单组运行数据的分层捕获
+对每组随机生成的 PD 模拟运行，系统会按 “输入→过程→输出” 分层收集数据：
+输入层数据收集
+随机生成病人参数（age/weight/pet_d_p_crea/plasma_values）与透析方案参数（transport_type/fill_volume/exchange_time），记录随机种子（seed）用于复现；
+将规范化的输入参数封装为 JSON 结构（input字段），暂存至内存。
+过程层数据收集
+启动 PD 仿真逻辑：基于输入参数模拟腹膜腔体积变化（V_D）、溶质（尿素 / 肌酐等）跨腹膜转运过程；
+实时捕获仿真耗时（elapsed_sec，通过系统时间戳差值计算）；
+将时间序列数据（时间向量t、V_D、各溶质浓度）压缩为.npz文件，保存至experiments/output/runs/，并记录文件路径（time_series_path）。
+输出层数据收集
+仿真结束后，计算统计指标：
+体积相关：V_max（最大腹膜腔体积）、V_min（最小腹膜腔体积）、V_mean（平均体积）；
+溶质相关：各溶质的final（终浓度）、mean（平均浓度）、std（浓度标准差）；
+将上述统计结果封装为summary字段，与输入层、过程层数据合并。
+
+聚合数据生成
+所有组运行完成后，脚本自动提取每组的核心字段（id/seed/tp/fill_volume/exchange_time/elapsed_sec/V_max/V_min/V_mean），通过pandas写入runs_summary.csv（结构化聚合表）与runs_summary.json（备用格式），同时生成summary_report.txt（含数据概览、仿真耗时统计）。
+
+校验与归档阶段：数据合法性验证 + 持久化存储
+输入合法性校验
+若环境安装jsonschema，则通过input_schema.json校验每组input字段（如病人年龄是否在 18-90 岁、填充体积是否在 500-3000mL）；若未安装，则执行轻量检查（仅验证字段是否存在）；
+校验结果写入validation_valid（布尔值），若失败则记录具体错误（如 “fill_volume 超出范围”）至validation_errors。
+数据持久化归档
+将单组运行的完整数据（含id/seed/input/summary等）写入run_000X.json（X 为运行编号），与.npz时序文件一一对应；
+所有文件归档至experiments/output/runs/，形成 “JSON（结构化数据）+ NPZ（时序数据）+ CSV（聚合数据）” 的完整数据体系。
+
+补充：数据复现与二次收集
+若需复现某组数据（如验证仿真结果稳定性），可通过指定seed重新运行：
+powershell
+# 复现seed=58947507的运行（对应id=1）
+python .\experiments\collect_data.py --seed 58947507 --dt 0.02 --total_time 15.0
+系统会生成与原运行完全一致的输入参数，确保仿真结果可验证。
+关键说明（PD 模拟场景适配）
+时序数据（.npz）的收集聚焦腹膜透析的动态过程（如溶质清除的时间规律），为后续分析 “透析方案对溶质清除效率的影响” 提供细粒度数据；
+聚合数据（CSV）的收集则为批量对比不同透析方案（如 fast/slow 转运类型、不同填充体积）的效果提供便捷入口，避免逐文件解析的低效性。
+

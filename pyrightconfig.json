@@ -1,0 +1,22 @@
+{
+  "venvPath": "backend",
+  "venv": "venv",
+  "executionEnvironments": [
+    {
+      "root": "backend",
+      "pythonVersion": "3.9",
+      "pythonPlatform": "Windows",
+      "extraPaths": []
+    },
+    {
+      "root": ".",
+      "pythonVersion": "3.9",
+      "pythonPlatform": "Windows",
+      "extraPaths": ["backend", "utils"],
+      "include": ["main.py", "utils"]
+    }
+  ],
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false
+}
+

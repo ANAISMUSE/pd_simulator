@@ -1,0 +1,18 @@
+uvicorn api_server:app --host 0.0.0.0 --port 8000
+
+cd frontend
+npm run dev
+
+python intrusion _detection.py
+
+# 启用 K-匿名化
+python intrusion_detection.py --use-privacy --k 10
+
+# 使用差分隐私
+python intrusion_detection.py --use-privacy --strategy differential_privacy --epsilon 0.5
+
+# 启用超参数调优
+python intrusion detection.py --tune
+
+#对比隐私保护前后的性能
+python intrusion_detection.py--use-privacy --k5 --compare
