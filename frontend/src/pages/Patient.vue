@@ -115,6 +115,13 @@
                 />
               </div>
             </div>
+            <div class="form-group share-flag">
+              <label>共享设置</label>
+              <label class="share-label">
+                <input v-model="patient.is_shared" type="checkbox" />
+                <span>允许本院其他医生查看该患者</span>
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -284,6 +291,7 @@ const defaultPatient = () => ({
   urine_volume: 500,
   blood_pressure_systolic: 140,
   blood_pressure_diastolic: 90,
+  is_shared: false,
 })
 
 const defaultBiomarkers = () => ({
@@ -347,7 +355,9 @@ onMounted(async () => {
 
 const loadPatientsList = async () => {
   try {
-    const response = await fetch(`${API_BASE}/patients`)
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const response = await fetch(`${API_BASE}/patients`, { headers })
     const data = await response.json()
     if (data.success) {
       patientsList.value = data.patients
@@ -356,6 +366,8 @@ const loadPatientsList = async () => {
     console.error('加载患者列表失败:', error)
   }
 }
+
+import { showToast } from '../utils/toast'
 
 const loadPatientData = async () => {
   if (!selectedPatientId.value) {
@@ -366,7 +378,9 @@ const loadPatientData = async () => {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`)
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`, { headers })
     const data = await response.json()
     if (data.success) {
       const p = data.patient
@@ -387,17 +401,17 @@ const loadPatientData = async () => {
       }
       biomarkers.value = p.biomarkers
       saveCurrentToStorage()
-      window.alert(`已加载患者：${p.name}`)
+      showToast(`已加载患者：${p.name}`, 'success')
     }
   } catch (error) {
     console.error('加载患者数据失败:', error)
-    window.alert('加载患者数据失败')
+    showToast('加载患者数据失败', 'error')
   }
 }
 
 const savePatient = async () => {
   if (!patient.value.name.trim()) {
-    window.alert('请输入患者姓名')
+    showToast('请输入患者姓名', 'info')
     return
   }
 
@@ -409,16 +423,22 @@ const savePatient = async () => {
   try {
     let response
 
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+
     if (selectedPatientId.value) {
       response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(patientData),
       })
     } else {
       response = await fetch(`${API_BASE}/patients`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(patientData),
       })
     }
@@ -429,13 +449,13 @@ const savePatient = async () => {
       selectedPatientId.value = data.patient.id
       await loadPatientsList()
       saveCurrentToStorage()
-      window.alert(selectedPatientId.value ? '患者信息已更新' : '新患者已保存')
+      showToast(selectedPatientId.value ? '患者信息已更新' : '新患者已保存', 'success')
     } else {
-      window.alert('保存失败: ' + data.error)
+      showToast('保存失败: ' + data.error, 'error')
     }
   } catch (error) {
     console.error('保存患者失败:', error)
-    window.alert('保存患者失败')
+    showToast('保存患者失败', 'error')
   }
 }
 
@@ -444,22 +464,25 @@ const deletePatient = async () => {
   if (!window.confirm('确定要删除这个患者吗？')) return
 
   try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
     const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`, {
       method: 'DELETE',
+      headers,
     })
     const data = await response.json()
 
     if (data.success) {
-      window.alert('患者已删除')
+      showToast('患者已删除', 'success')
       selectedPatientId.value = null
       await loadPatientsList()
       await loadPatientData()
     } else {
-      window.alert('删除失败: ' + data.error)
+      showToast('删除失败: ' + data.error, 'error')
     }
   } catch (error) {
     console.error('删除患者失败:', error)
-    window.alert('删除患者失败')
+    showToast('删除患者失败', 'error')
   }
 }
 
@@ -583,6 +606,18 @@ watch(
 .form-group small {
   font-size: 11px;
   color: #999;
+}
+.share-flag .share-label {
+  margin-top: 4px;
+  font-size: 13px;
+  color: rgba(31, 35, 64, 0.9);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.share-flag input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
 }
 .subsection {
   margin-top: 10px;

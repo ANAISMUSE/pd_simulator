@@ -7,9 +7,6 @@
       </div>
 
       <nav class="nav">
-        <RouterLink class="nav-item" to="/app/user" active-class="active">
-          用户基本信息
-        </RouterLink>
         <RouterLink class="nav-item" to="/app/patient" active-class="active">
           患者信息
         </RouterLink>
@@ -22,6 +19,13 @@
       </nav>
 
       <div class="sidebar-footer">
+        <div class="user-card" @click="goProfile">
+          <div class="avatar">{{ avatarInitial }}</div>
+          <div class="user-text">
+            <div class="user-name">{{ displayName }}</div>
+            <div class="user-link">查看个人信息</div>
+          </div>
+        </div>
         <button class="btn-logout" @click="logout">退出登录</button>
       </div>
     </aside>
@@ -34,8 +38,17 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
+import { computed } from 'vue'
 
 const router = useRouter()
+
+const rawName = localStorage.getItem('pd_username') || '用户'
+const avatarInitial = rawName.slice(0, 1).toUpperCase()
+const displayName = rawName
+
+const goProfile = () => {
+  router.push('/app/user')
+}
 
 const logout = () => {
   localStorage.removeItem('pd_token')
@@ -114,6 +127,47 @@ const logout = () => {
 .sidebar-footer {
   margin-top: auto;
   padding: 8px 6px;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+.user-card:hover {
+  box-shadow: 0 4px 12px rgba(31, 35, 64, 0.12);
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+}
+.user-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.user-name {
+  font-size: 13px;
+  font-weight: 750;
+  color: #1f2340;
+}
+.user-link {
+  font-size: 11px;
+  color: rgba(31, 35, 64, 0.65);
 }
 
 .btn-logout {

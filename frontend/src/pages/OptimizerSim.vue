@@ -102,6 +102,18 @@
           <button class="btn-primary" :disabled="loading" @click="runOneRound">
             {{ loading ? '⏳ 优化中...' : '④ 运行一轮优化并记录' }}
           </button>
+          <div v-if="loading" class="progress-wrap">
+            <div class="progress-head">
+              <span>优化进度</span>
+              <span>{{ Math.round(progress * 100) }}%</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" :style="{ width: `${Math.round(progress * 100)}%` }"></div>
+            </div>
+            <div class="progress-sub">
+              第 {{ progressGen }} / {{ progressTotal }} 代 · 当前最佳 fitness={{ progressBest.toFixed(4) }}
+            </div>
+          </div>
 
           <div class="row-actions">
             <button class="btn-secondary" :disabled="!rounds.length" @click="clearRounds">清空历史轮次</button>
@@ -193,6 +205,10 @@ const durationHours = ref(24)
 const populationSize = ref(40)
 const generations = ref(25)
 const loading = ref(false)
+const progress = ref(0)
+const progressGen = ref(0)
+const progressTotal = ref(0)
+const progressBest = ref(0)
 
 const baseline = ref(null) // { regimenName, summary }
 const baselineResults = ref(null) // full results for curves
@@ -291,8 +307,13 @@ const runOneRound = async () => {
   }
 
   loading.value = true
+  progress.value = 0
+  progressGen.value = 0
+  progressTotal.value = generations.value
+  progressBest.value = 0
   try {
-    const resp = await fetch(`${API_BASE}/optimize/freeform`, {
+    // 先启动异步任务
+    const startResp = await fetch(`${API_BASE}/optimize/freeform/async`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -305,13 +326,42 @@ const runOneRound = async () => {
         phase_template: toBackendPhaseTemplate(),
       }),
     })
-    const data = await resp.json().catch(() => ({}))
-    if (!data.success || !data.result) {
-      window.alert(data.error || '优化失败')
+    const startData = await startResp.json().catch(() => ({}))
+    if (!startData.success || !startData.job_id) {
+      window.alert(startData.error || '启动优化失败')
+      return
+    }
+    const jobId = startData.job_id
+
+    // 轮询进度
+    const poll = async () => {
+      const r = await fetch(`${API_BASE}/optimize/jobs/${jobId}`)
+      const d = await r.json().catch(() => ({}))
+      if (!d.success || !d.job) throw new Error(d.error || '获取进度失败')
+      const job = d.job
+      progress.value = Number(job.progress || 0)
+      progressGen.value = Number(job.current_generation || 0)
+      progressTotal.value = Number(job.total_generations || generations.value)
+      progressBest.value = Number(job.best_fitness || 0)
+      return job
+    }
+
+    let job = await poll()
+    while (job.status === 'running') {
+      await new Promise((res) => setTimeout(res, 400))
+      job = await poll()
+    }
+    if (job.status !== 'done') {
+      window.alert(job.error || '优化失败')
       return
     }
 
-    const result = data.result
+    const result = job.result
+    if (!result) {
+      window.alert('优化结果为空')
+      return
+    }
+
     const predicted = result.predicted?.summary
     if (!predicted) {
       window.alert('后端没有返回可对比的预测 summary（请确认后端已更新）。')
@@ -772,6 +822,38 @@ input {
   display: flex;
   gap: 10px;
   margin-top: 10px;
+}
+.progress-wrap {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #f8f9fa;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(31, 35, 64, 0.8);
+  margin-bottom: 8px;
+}
+.progress-bar {
+  height: 10px;
+  background: rgba(102, 126, 234, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.progress-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(31, 35, 64, 0.65);
 }
 .chart-container {
   height: 420px;

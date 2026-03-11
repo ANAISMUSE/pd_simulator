@@ -319,7 +319,8 @@ class GeneticOptimizer:
                     'avg_fitness': avg_fitness,
                     'best_fitness': self.best_fitness,
                     'best_prescription': self.best_prescription.to_dict(),
-                    'diversity': diversity / self.population_size
+                    'diversity': diversity / self.population_size,
+                    'total_generations': self.generations,
                 })
             
             # ✅ 选择

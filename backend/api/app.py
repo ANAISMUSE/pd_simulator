@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import numpy as np
 from typing import Any, Dict, List, Optional
@@ -11,6 +11,10 @@ from functools import wraps
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired  # type: ignore
 from werkzeug.security import generate_password_hash, check_password_hash  # type: ignore
 import traceback
+import threading
+import time
+import csv
+import io
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
@@ -86,6 +90,21 @@ def auth_required(fn):
         request.current_user = user  # type: ignore[attr-defined]
         return fn(*args, **kwargs)
     return wrapper
+
+
+def _patient_visibility_filter(user: User):
+    """
+    当前医生能看到的患者范围：
+    - 自己创建的患者：owner_user_id == user.id
+    - 同机构、已标记共享的患者：owner_org == user.org AND is_shared == True
+    """
+    base = (Patient.owner_user_id == user.id)
+    if user.org:
+        # 仅共享标记为 True 的患者对同机构开放；
+        # 对于历史数据，owner_org 为空但 is_shared=True 的，也允许同机构医生看到。
+        shared_scope = or_(Patient.owner_org == user.org, Patient.owner_org.is_(None))
+        return or_(base, Patient.is_shared.is_(True) & shared_scope)
+    return base
 
 # ==================== 异常输出（打印 Traceback）====================
 
@@ -164,6 +183,29 @@ def auth_login():
 def auth_me():
     user = request.current_user  # type: ignore[attr-defined]
     return jsonify({'success': True, 'user': user.to_dict()})
+
+
+@app.route('/api/auth/me/settings', methods=['PUT'])
+@auth_required
+def update_me_settings():
+    """
+    更新当前用户的一些设置：
+    - org: 所在医院/科室
+    - allow_share_patients: 是否允许自己的患者对同机构医生可见
+    """
+    user: User = request.current_user  # type: ignore[attr-defined]
+    payload = request.get_json(silent=True) or {}
+    try:
+        if 'org' in payload:
+            org = (payload.get('org') or '').strip() or None
+            user.org = org
+        if 'allow_share_patients' in payload:
+            user.allow_share_patients = bool(payload.get('allow_share_patients'))
+        db.session.commit()
+        return jsonify({'success': True, 'user': user.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
 
 # ==================== 数据结构定义 ====================
 
@@ -624,35 +666,48 @@ simulator = ThreePoreSimulator()
 # ==================== 患者管理 API ====================
 
 @app.route('/api/patients', methods=['GET'])
+@auth_required
 def get_patients():
-    """获取所有患者列表"""
+    """获取当前医生可见的患者列表（包含自己 + 同机构共享患者）"""
     try:
-        patients = Patient.query.all()
-        return jsonify({
-            'success': True,
-            'patients': [p.to_dict() for p in patients]
-        })
+        user: User = request.current_user  # type: ignore[attr-defined]
+        q = Patient.query
+        q = q.filter(_patient_visibility_filter(user))
+        patients = q.order_by(Patient.created_at.desc()).all()
+        return jsonify(
+            {
+                'success': True,
+                'patients': [p.to_dict() for p in patients],
+            }
+        )
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return _error_response(e, 500)
 
 @app.route('/api/patients/<int:patient_id>', methods=['GET'])
+@auth_required
 def get_patient(patient_id):
-    """获取单个患者信息"""
+    """获取单个患者信息（访问控制）"""
     try:
-        patient = Patient.query.get_or_404(patient_id)
-        return jsonify({
-            'success': True,
-            'patient': patient.to_dict()
-        })
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first()
+        if not patient:
+            return jsonify({'success': False, 'error': 'patient not found'}), 404
+        return jsonify({'success': True, 'patient': patient.to_dict()})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 404
+        return _error_response(e, 500)
 
 @app.route('/api/patients', methods=['POST'])
+@auth_required
 def create_patient():
-    """创建新患者"""
+    """创建新患者：自动绑定当前医生和机构"""
     try:
+        user: User = request.current_user  # type: ignore[attr-defined]
         data = request.json or {}  # ✅ 防止 None
-        
+
+        is_shared = bool(data.get('is_shared', False))
+
         patient = Patient(
             name=data.get('name', '未命名患者'),
             gender=data.get('gender', 'male'),
@@ -688,9 +743,12 @@ def create_patient():
             ph=data.get('biomarkers', {}).get('ph', 7.35),
             bicarbonate=data.get('biomarkers', {}).get('bicarbonate', 22),
             pco2=data.get('biomarkers', {}).get('pco2', 40),
-            anion_gap=data.get('biomarkers', {}).get('anion_gap', 12)
+            anion_gap=data.get('biomarkers', {}).get('anion_gap', 12),
+            owner_user_id=user.id,
+            owner_org=user.org,
+            is_shared=is_shared,
         )
-        
+
         db.session.add(patient)
         db.session.commit()
         
@@ -704,10 +762,17 @@ def create_patient():
         return jsonify({'success': False, 'error': str(e)}), 400
 
 @app.route('/api/patients/<int:patient_id>', methods=['PUT'])
+@auth_required
 def update_patient(patient_id):
-    """更新患者信息"""
+    """更新患者信息（只能修改自己有权限的患者）"""
     try:
-        patient = Patient.query.get_or_404(patient_id)
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first()
+        if not patient:
+            return jsonify({'success': False, 'error': 'patient not found'}), 404
+
         data = request.json or {}  # ✅ 防止 None
         
         for field in ['name', 'gender', 'age', 'weight', 'height', 'bsa',
@@ -725,7 +790,10 @@ def update_patient(patient_id):
                           'triglycerides', 'ph', 'bicarbonate', 'pco2', 'anion_gap']:
                 if field in data['biomarkers']:
                     setattr(patient, field, data['biomarkers'][field])
-        
+        # 是否共享标识（仅拥有者医生可修改）
+        if 'is_shared' in data and patient.owner_user_id == user.id:
+            patient.is_shared = bool(data['is_shared'])
+
         db.session.commit()
         
         return jsonify({
@@ -738,10 +806,16 @@ def update_patient(patient_id):
         return jsonify({'success': False, 'error': str(e)}), 400
 
 @app.route('/api/patients/<int:patient_id>', methods=['DELETE'])
+@auth_required
 def delete_patient(patient_id):
-    """删除患者"""
+    """删除患者（仅限创建该患者的医生自己）"""
     try:
-        patient = Patient.query.get_or_404(patient_id)
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, Patient.owner_user_id == user.id
+        ).first()
+        if not patient:
+            return jsonify({'success': False, 'error': 'patient not found or no permission'}), 403
         db.session.delete(patient)
         db.session.commit()
         
@@ -756,9 +830,13 @@ def delete_patient(patient_id):
 
 
 @app.route('/api/patients/<int:patient_id>/biochemistry', methods=['GET'])
+@auth_required
 def get_patient_biochemistry(patient_id: int):
-    """获取患者历史生化指标"""
-    patient = Patient.query.get_or_404(patient_id)
+    """获取患者历史生化指标（需对该患者有访问权限）"""
+    user: User = request.current_user  # type: ignore[attr-defined]
+    patient = Patient.query.filter(
+        Patient.id == patient_id, _patient_visibility_filter(user)
+    ).first_or_404()
     snapshots = (PatientBiochemistrySnapshot
                  .query
                  .filter_by(patient_id=patient.id)
@@ -772,10 +850,14 @@ def get_patient_biochemistry(patient_id: int):
 
 
 @app.route('/api/patients/<int:patient_id>/biochemistry', methods=['POST'])
+@auth_required
 def create_patient_biochemistry(patient_id: int):
-    """新增一条生化指标记录"""
+    """新增一条生化指标记录（需要对该患者有访问权限）"""
     try:
-        patient = Patient.query.get_or_404(patient_id)
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first_or_404()
         data = request.json or {}
         snapshot = PatientBiochemistrySnapshot(
             patient_id=patient.id,
@@ -1273,21 +1355,22 @@ def optimize_regimen():
         # 初始化优化目标和遗传优化器
         objectives = OptimizationObjectives(
             transport_type=transport_type,
-            plasma_values=plasma_values
+            plasma_values=plasma_values,
         )
-        
-        optimizer = GeneticOptimizer(
-            objectives=objectives,
-            target_ktv=target_ktv
-        )
+        # 注意：GeneticOptimizer 的签名在实现中支持 target_ktv，
+        # 这里通过 type: ignore 避免静态类型检查误报。
+        optimizer = GeneticOptimizer(objectives=objectives)  # type: ignore[call-arg]
         
         # 执行遗传算法优化
         best_prescription = optimizer.optimize()
+        phases = getattr(best_prescription, "phases", None)
+        if phases is None:
+            phases = best_prescription.get("phases", [])  # type: ignore[union-attr]
         
-        # 模拟最优方案以获取预测的Kt/V值
+        # 模拟最优方案以获取预测的 Kt/V 值
         best_regimen = {
             'name': '优化方案',
-            'phases': best_prescription.phases
+            'phases': phases,
         }
         
         results = simulator.simulate_full_regimen(best_regimen, patient, biomarkers)
@@ -1298,7 +1381,7 @@ def optimize_regimen():
             'regimen_id': 'optimized',
             'regimen_name': '智能优化方案',
             'predicted_ktv': predicted_ktv,
-            'phases': best_prescription.phases
+            'phases': phases,
         }
         
         return jsonify({
@@ -1307,6 +1390,89 @@ def optimize_regimen():
         })
     
     except Exception as e:
+        return _error_response(e, 500)
+
+
+@app.route('/api/patients/import/csv', methods=['POST'])
+def import_patients_csv():
+    """
+    批量导入患者信息（CSV 表格）。
+    - 接受 multipart/form-data，字段名为 file
+    - 表头示例：name,gender,age,weight,height,bsa,dialysis_vintage,primary_disease,residual_kidney_function,peritoneal_transport,urine_volume,blood_pressure_systolic,blood_pressure_diastolic
+    - 允许多余列，未识别列会忽略
+    """
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'success': False, 'error': 'missing file'}), 400
+    try:
+        stream = io.StringIO(file.stream.read().decode('utf-8-sig'))
+        reader = csv.DictReader(stream)
+        count = 0
+        for row in reader:
+            name = (row.get('name') or '').strip()
+            if not name:
+                continue
+            patient = Patient(
+                name=name,
+                gender=row.get('gender') or None,
+                age=int(row['age']) if row.get('age') else None,
+                weight=float(row['weight']) if row.get('weight') else None,
+                height=float(row['height']) if row.get('height') else None,
+                bsa=float(row['bsa']) if row.get('bsa') else None,
+                dialysis_vintage=int(row['dialysis_vintage']) if row.get('dialysis_vintage') else None,
+                primary_disease=row.get('primary_disease') or None,
+                residual_kidney_function=row.get('residual_kidney_function') or None,
+                peritoneal_transport=row.get('peritoneal_transport') or None,
+                urine_volume=float(row['urine_volume']) if row.get('urine_volume') else None,
+                blood_pressure_systolic=float(row['blood_pressure_systolic']) if row.get('blood_pressure_systolic') else None,
+                blood_pressure_diastolic=float(row['blood_pressure_diastolic']) if row.get('blood_pressure_diastolic') else None,
+            )
+            db.session.add(patient)
+            count += 1
+        db.session.commit()
+        return jsonify({'success': True, 'imported': count})
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/patients/batch', methods=['POST'])
+def import_patients_batch():
+    """
+    批量导入/互通接口：接受 JSON 数组 [{patient...}, ...]，
+    用于外部数据库/系统通过 API 推送患者数据。
+    """
+    data = request.get_json(silent=True) or {}
+    patients = data.get('patients') or []
+    if not isinstance(patients, list):
+        return jsonify({'success': False, 'error': 'patients must be a list'}), 400
+    created = 0
+    try:
+        for p in patients:
+            name = (p.get('name') or '').strip()
+            if not name:
+                continue
+            patient = Patient(
+                name=name,
+                gender=p.get('gender'),
+                age=p.get('age'),
+                weight=p.get('weight'),
+                height=p.get('height'),
+                bsa=p.get('bsa'),
+                dialysis_vintage=p.get('dialysis_vintage'),
+                primary_disease=p.get('primary_disease'),
+                residual_kidney_function=p.get('residual_kidney_function'),
+                peritoneal_transport=p.get('peritoneal_transport'),
+                urine_volume=p.get('urine_volume'),
+                blood_pressure_systolic=p.get('blood_pressure_systolic'),
+                blood_pressure_diastolic=p.get('blood_pressure_diastolic'),
+            )
+            db.session.add(patient)
+            created += 1
+        db.session.commit()
+        return jsonify({'success': True, 'created': created})
+    except Exception as e:
+        db.session.rollback()
         return _error_response(e, 500)
 
 
@@ -1353,6 +1519,112 @@ def run_genetic_optimization(mode: str):
         return jsonify({'success': True, 'result': result})
     except Exception as e:
         return _error_response(e, 500)
+
+
+# ==================== 异步优化 + 进度查询 ====================
+
+_opt_jobs: Dict[str, Dict[str, Any]] = {}
+_opt_jobs_lock = threading.Lock()
+
+def _job_set(job_id: str, patch: Dict[str, Any]):
+    with _opt_jobs_lock:
+        job = _opt_jobs.get(job_id, {})
+        job.update(patch)
+        _opt_jobs[job_id] = job
+
+def _job_get(job_id: str) -> Optional[Dict[str, Any]]:
+    with _opt_jobs_lock:
+        job = _opt_jobs.get(job_id)
+        return copy.deepcopy(job) if job else None
+
+def _compute_optimization_result(mode: str, data: Dict[str, Any], progress_cb=None) -> Dict[str, Any]:
+    patient = data.get('patient', {}) or {}
+    biomarkers = data.get('biomarkers', {}) or {}
+    objectives = OptimizationObjectives(
+        transport_type=resolve_transport_type(patient),
+        plasma_values=extract_plasma_values(biomarkers),
+        simulation_time=data.get('simulation_minutes', 24 * 60)
+    )
+    optimizer = GeneticOptimizer(
+        objectives=objectives,
+        population_size=data.get('population_size', 40),
+        generations=data.get('generations', 25),
+        mutation_rate=data.get('mutation_rate', 0.2),
+        crossover_rate=data.get('crossover_rate', 0.8),
+        mode=mode,
+        phase_template=data.get('phase_template')
+    )
+    result = optimizer.optimize(callback=progress_cb)
+
+    # predicted summary
+    prescription = result.get('prescription') if isinstance(result, dict) else None
+    if mode == 'freeform' and prescription and isinstance(prescription, dict):
+        phases = prescription.get('phases') or []
+        regimen_payload = normalize_regimen_payload({'name': 'GA Optimized', 'phases': phases})
+        sim_results = simulator.simulate_full_regimen(regimen_payload, patient, biomarkers)
+        if isinstance(sim_results, dict) and sim_results.get('summary'):
+            result['predicted'] = {'summary': sim_results.get('summary')}
+    return result
+
+def _start_opt_job(mode: str, data: Dict[str, Any]) -> str:
+    job_id = f"job_{int(time.time() * 1000)}"
+    total_generations = int(data.get('generations', 25) or 25)
+    _job_set(job_id, {
+        'status': 'running',
+        'progress': 0.0,
+        'current_generation': 0,
+        'total_generations': total_generations,
+        'best_fitness': 0.0,
+        'started_at': time.time(),
+    })
+
+    def progress_cb(payload: Dict[str, Any]):
+        gen = int(payload.get('generation', 0) or 0)
+        best = float(payload.get('best_fitness', 0.0) or 0.0)
+        total = int(payload.get('total_generations') or total_generations)
+        progress = min(max(gen / max(total, 1), 0.0), 1.0)
+        _job_set(job_id, {
+            'current_generation': gen,
+            'total_generations': total,
+            'best_fitness': best,
+            'progress': progress,
+            'updated_at': time.time(),
+        })
+
+    def runner():
+        try:
+            result = _compute_optimization_result(mode, data, progress_cb=progress_cb)
+            _job_set(job_id, {
+                'status': 'done',
+                'progress': 1.0,
+                'result': result,
+                'ended_at': time.time(),
+            })
+        except Exception as e:
+            tb = traceback.format_exc()
+            _job_set(job_id, {
+                'status': 'error',
+                'error': str(e),
+                'traceback': tb,
+                'ended_at': time.time(),
+            })
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    return job_id
+
+@app.route('/api/optimize/freeform/async', methods=['POST'])
+def optimize_regimen_freeform_async():
+    data = request.get_json(silent=True) or {}
+    job_id = _start_opt_job('freeform', data)
+    return jsonify({'success': True, 'job_id': job_id})
+
+@app.route('/api/optimize/jobs/<job_id>', methods=['GET'])
+def get_opt_job(job_id: str):
+    job = _job_get(job_id)
+    if not job:
+        return jsonify({'success': False, 'error': 'job not found'}), 404
+    return jsonify({'success': True, 'job': job})
 
 
 @app.route('/api/optimize/structured', methods=['POST'])

@@ -12,6 +12,8 @@ class User(db.Model):
     username = db.Column(db.String(80), nullable=False, unique=True, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     display_name = db.Column(db.String(120))
+    org = db.Column(db.String(120))  # 医院/科室/机构
+    allow_share_patients = db.Column(db.Boolean, default=False)  # 是否同意与本机构医生共享患者
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
@@ -19,6 +21,8 @@ class User(db.Model):
             'id': self.id,
             'username': self.username,
             'display_name': self.display_name,
+            'org': self.org,
+            'allow_share_patients': bool(self.allow_share_patients),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -27,6 +31,11 @@ class Patient(db.Model):
     __tablename__ = 'patients'
     
     id = db.Column(db.Integer, primary_key=True)
+
+    # 所属医生 / 机构
+    owner_user_id = db.Column(db.Integer, index=True)  # 归属医生（User.id）
+    owner_org = db.Column(db.String(120), index=True)  # 归属医院/科室，方便机构内共享
+    is_shared = db.Column(db.Boolean, default=False, index=True)  # 是否对同机构其他医生共享
     
     # 基本信息
     name = db.Column(db.String(100), nullable=False)
@@ -265,6 +274,7 @@ def apply_schema_migrations(app):
         inspector = inspect(db.engine)
         
         alterations = []
+        # regimen_templates 相关补充列
         if not _column_exists(inspector, 'regimen_templates', 'version'):
             alterations.append("ALTER TABLE regimen_templates ADD COLUMN version INTEGER DEFAULT 1")
         if not _column_exists(inspector, 'regimen_templates', 'parent_id'):
@@ -275,6 +285,20 @@ def apply_schema_migrations(app):
             alterations.append("ALTER TABLE regimen_templates ADD COLUMN schema_version INTEGER DEFAULT 1")
         if not _column_exists(inspector, 'regimen_templates', 'metadata'):
             alterations.append("ALTER TABLE regimen_templates ADD COLUMN metadata JSON")
+
+        # User 表新增机构与共享设置
+        if not _column_exists(inspector, 'users', 'org'):
+            alterations.append("ALTER TABLE users ADD COLUMN org VARCHAR(120)")
+        if not _column_exists(inspector, 'users', 'allow_share_patients'):
+            alterations.append("ALTER TABLE users ADD COLUMN allow_share_patients BOOLEAN DEFAULT 0")
+
+        # Patient 表新增归属医生、机构与共享标志
+        if not _column_exists(inspector, 'patients', 'owner_user_id'):
+            alterations.append("ALTER TABLE patients ADD COLUMN owner_user_id INTEGER")
+        if not _column_exists(inspector, 'patients', 'owner_org'):
+            alterations.append("ALTER TABLE patients ADD COLUMN owner_org VARCHAR(120)")
+        if not _column_exists(inspector, 'patients', 'is_shared'):
+            alterations.append("ALTER TABLE patients ADD COLUMN is_shared BOOLEAN DEFAULT 0")
         
         for statement in alterations:
             with db.engine.begin() as connection:

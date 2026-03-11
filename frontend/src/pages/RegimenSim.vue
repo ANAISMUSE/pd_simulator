@@ -8,6 +8,23 @@
     <div class="main">
       <div class="left">
         <div class="section-card">
+          <h2>👤 选择患者（与“患者信息”模块区分）</h2>
+          <div class="hint">
+            这里仅用于“方案模拟”选择模拟对象；患者的详细编辑请在左侧菜单的“患者信息”中完成。
+          </div>
+          <div class="patient-row">
+            <select v-model="selectedPatientId" @change="loadPatientData" class="patient-select">
+              <option :value="null">（请选择患者）</option>
+              <option v-for="p in patientsList" :key="p.id" :value="p.id">
+                {{ p.name }} - {{ p.age }}岁 - {{ p.gender === 'male' ? '男' : '女' }}
+              </option>
+            </select>
+            <button class="btn-secondary" @click="reloadPatients">刷新列表</button>
+          </div>
+          <div v-if="activePatientName" class="patient-tip">当前模拟患者：{{ activePatientName }}</div>
+        </div>
+
+        <div class="section-card">
           <h2>📋 透析方案选择</h2>
 
           <div class="regimen-section">
@@ -145,8 +162,8 @@
               </div>
             </div>
 
-            <div v-if="simulationResult" class="chart-container">
-              <canvas ref="chartCanvas"></canvas>
+            <div v-if="simulationResult" class="chart-container" role="img" aria-label="模拟指标随时间变化图">
+              <canvas ref="chartCanvas" width="800" height="400"></canvas>
             </div>
 
             <div v-if="comparisonResults.length" class="result-card">
@@ -233,6 +250,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
+import { showToast } from '../utils/toast'
 
 Chart.register(...registerables)
 
@@ -250,31 +268,98 @@ const showCustomDialog = ref(false)
 const chartCanvas = ref(null)
 const comparisonChartCanvas = ref(null)
 
+// 患者选择（仅用于本页模拟）
+const patientsList = ref([])
+const selectedPatientId = ref(null)
+const activePatientName = ref('')
+const patientPayload = ref(null) // {patient, biomarkers}
+
 const customRegimen = ref({
   name: '',
   phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
 })
 
 const loadPatientPayload = () => {
-  const raw = localStorage.getItem('pd_current_patient')
-  if (!raw) {
-    window.alert('请先在“患者信息”页面填写并保存患者，再进行方案模拟。')
-    return null
-  }
-  try {
-    const data = JSON.parse(raw)
-    return { patient: data.patient, biomarkers: data.biomarkers }
-  } catch (e) {
-    console.error('解析本地患者信息失败', e)
-    window.alert('本地患者信息损坏，请重新在“患者信息”页保存。')
-    return null
-  }
+  // 严格要求：必须在本页上方明确选择一个患者
+  if (patientPayload.value?.patient && patientPayload.value?.biomarkers) return patientPayload.value
+  showToast('请先在左侧“选择患者”下拉框中选择一名患者，再进行模拟。', 'info')
+  return null
 }
 
 onMounted(async () => {
   await loadPresets()
   loadCustomRegimens()
+  await reloadPatients()
 })
+
+const reloadPatients = async () => {
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const resp = await fetch(`${API_BASE}/patients`, { headers })
+    const data = await resp.json()
+    if (data.success) patientsList.value = data.patients
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const loadPatientData = async () => {
+  activePatientName.value = ''
+  patientPayload.value = null
+  if (!selectedPatientId.value) {
+    simulationResult.value = null
+    comparisonResults.value = []
+    return
+  }
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const resp = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`, { headers })
+    const data = await resp.json()
+    if (!data.success) {
+      showToast(data.error || '加载患者失败', 'error')
+      return
+    }
+    const p = data.patient
+    activePatientName.value = p.name
+    patientPayload.value = {
+      patient: {
+        name: p.name,
+        gender: p.gender,
+        age: p.age,
+        weight: p.weight,
+        height: p.height,
+        bsa: p.bsa,
+        dialysis_vintage: p.dialysis_vintage,
+        primary_disease: p.primary_disease,
+        residual_kidney_function: p.residual_kidney_function,
+        peritoneal_transport: p.peritoneal_transport,
+        urine_volume: p.urine_volume,
+        blood_pressure_systolic: p.blood_pressure_systolic,
+        blood_pressure_diastolic: p.blood_pressure_diastolic,
+      },
+      biomarkers: p.biomarkers || {
+        creatinine: 884,
+        bun: 25.3,
+        potassium: 4.8,
+        sodium: 138
+      },
+    }
+    // 同步写入“当前患者”，让优化页也能直接用
+    try {
+      localStorage.setItem('pd_current_patient', JSON.stringify(patientPayload.value))
+    } catch (e) {
+      console.error(e)
+    }
+    // 切换患者后清空上次模拟结果，避免界面仍显示上一名患者的数据
+    simulationResult.value = null
+    comparisonResults.value = []
+  } catch (e) {
+    console.error(e)
+    showToast('加载患者失败', 'error')
+  }
+}
 
 const loadPresets = async () => {
   try {
@@ -330,13 +415,13 @@ const savePresetAsCustom = async (presetId) => {
       customRegimens.value.push(newRegimen)
       persistCustomRegimens()
       selectedPresets.value = [`custom_${newRegimen.id}`]
-      window.alert('预设方案已保存为自定义方案')
+      showToast('预设方案已保存为自定义方案', 'success')
     } else {
-      window.alert('获取预设方案失败: ' + data.error)
+      showToast('获取预设方案失败: ' + data.error, 'error')
     }
   } catch (error) {
     console.error('保存预设方案为自定义方案失败:', error)
-    window.alert('保存预设方案为自定义方案失败')
+    showToast('保存预设方案为自定义方案失败', 'error')
   }
 }
 
@@ -355,11 +440,11 @@ const removePhase = (index) => {
 
 const saveCustomRegimen = () => {
   if (!customRegimen.value.name.trim()) {
-    window.alert('请输入方案名称')
+    showToast('请输入方案名称', 'info')
     return
   }
   if (!customRegimen.value.phases.length) {
-    window.alert('请至少添加一个透析阶段')
+    showToast('请至少添加一个透析阶段', 'info')
     return
   }
   const newRegimen = {
@@ -372,7 +457,7 @@ const saveCustomRegimen = () => {
   persistCustomRegimens()
   selectedPresets.value = [`custom_${newRegimen.id}`]
   showCustomDialog.value = false
-  window.alert(`自定义方案 "${newRegimen.name}" 已保存`)
+  showToast(`自定义方案 "${newRegimen.name}" 已保存`, 'success')
   customRegimen.value = {
     name: '',
     phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
@@ -384,7 +469,7 @@ const deleteCustomRegimen = (id) => {
   customRegimens.value = customRegimens.value.filter((r) => r.id !== id)
   persistCustomRegimens()
   selectedPresets.value = selectedPresets.value.filter((p) => p !== `custom_${id}`)
-  window.alert('方案已删除')
+  showToast('方案已删除', 'success')
 }
 
 const formatDate = (isoString) => {
@@ -399,7 +484,7 @@ const formatDate = (isoString) => {
 
 const runSimulation = async () => {
   if (!selectedPresets.value.length) {
-    window.alert('请先选择一个透析方案')
+    showToast('请先选择一个透析方案', 'info')
     return
   }
   const payload = loadPatientPayload()
@@ -416,7 +501,7 @@ const runSimulation = async () => {
     if (type === 'custom') {
       const regimen = customRegimens.value.find((r) => r.id === id)
       if (!regimen) {
-        window.alert('找不到该自定义方案')
+        showToast('找不到该自定义方案', 'error')
         loading.value = false
         return
       }
@@ -435,7 +520,12 @@ const runSimulation = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         patient: payload.patient,
-        biomarkers: payload.biomarkers,
+        biomarkers: payload.biomarkers || {
+          creatinine: 884,
+          bun: 25.3,
+          potassium: 4.8,
+          sodium: 138
+        },
         regimen: regimenData,
       }),
     })
@@ -456,14 +546,20 @@ const runSimulation = async () => {
       } catch (e) {
         console.error('保存最近一次模拟结果失败', e)
       }
+      // 等 DOM 更新且 canvas ref 可用后再绘图（v-if 下 ref 可能晚一帧）
       await nextTick()
-      renderChart()
+      await nextTick()
+      if (!chartCanvas.value) {
+        setTimeout(() => renderChart(), 50)
+      } else {
+        renderChart()
+      }
     } else {
-      window.alert('模拟失败: ' + data.error)
+      showToast('模拟失败: ' + data.error, 'error')
     }
   } catch (error) {
     console.error('模拟失败:', error)
-    window.alert('模拟失败，请检查后端是否正常运行')
+    showToast('模拟失败，请检查后端是否正常运行', 'error')
   } finally {
     loading.value = false
   }
@@ -471,7 +567,7 @@ const runSimulation = async () => {
 
 const compareRegimens = async () => {
   if (selectedPresets.value.length < 2) {
-    window.alert('请至少选择两个方案进行对比')
+    showToast('请至少选择两个方案进行对比', 'info')
     return
   }
   const payload = loadPatientPayload()
@@ -530,7 +626,18 @@ const renderChart = () => {
   const ctx = chartCanvas.value.getContext('2d')
   if (chartCanvas.value.chart) chartCanvas.value.chart.destroy()
 
-  const timeLabels = simulationResult.value.time_series.time.map((t) => t.toFixed(1))
+  const ts = simulationResult.value.time_series || {}
+  const time = ts.time || []
+  if (!time.length) {
+    // 没有时间序列数据，直接不画动画，避免空白
+    return
+  }
+  const timeLabels = time.map((t) => t.toFixed(1))
+
+  // 后端 volume 为 mL，图表显示 L
+  const volumeL = (ts.volume || []).map((v) => (typeof v === 'number' ? v / 1000 : v))
+  const creatinineClearance = ts.creatinine_clearance || []
+  const ureaClearance = ts.urea_clearance || []
 
   chartCanvas.value.chart = new Chart(ctx, {
     type: 'line',
@@ -539,21 +646,21 @@ const renderChart = () => {
       datasets: [
         {
           label: '腹腔液体积 (L)',
-          data: simulationResult.value.time_series.volume,
+          data: volumeL,
           borderColor: 'rgb(75, 192, 192)',
           backgroundColor: 'rgba(75, 192, 192, 0.2)',
           yAxisID: 'y',
         },
         {
           label: '肌酐清除率 (μmol/min)',
-          data: simulationResult.value.time_series.creatinine_clearance,
+          data: creatinineClearance,
           borderColor: 'rgb(255, 99, 132)',
           backgroundColor: 'rgba(255, 99, 132, 0.2)',
           yAxisID: 'y1',
         },
         {
           label: '尿素清除率 (μmol/min)',
-          data: simulationResult.value.time_series.urea_clearance,
+          data: ureaClearance,
           borderColor: 'rgb(255, 159, 64)',
           backgroundColor: 'rgba(255, 159, 64, 0.2)',
           yAxisID: 'y1',
@@ -564,6 +671,7 @@ const renderChart = () => {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      animation: true,
       scales: {
         x: { title: { display: true, text: '时间 (分钟)' } },
         y: {
@@ -665,6 +773,30 @@ const renderComparisonChart = () => {
   border-radius: 12px;
   padding: 18px;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+}
+.hint {
+  font-size: 12px;
+  color: rgba(31, 35, 64, 0.65);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+.patient-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.patient-select {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: white;
+}
+.patient-tip {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: rgba(31, 35, 64, 0.9);
 }
 .section-card h2 {
   font-size: 18px;
@@ -861,9 +993,19 @@ const renderComparisonChart = () => {
   opacity: 0.9;
 }
 .chart-container {
+  min-height: 420px;
   height: 420px;
+  position: relative;
+  width: 100%;
+}
+.chart-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 420px;
 }
 .comparison-chart-container {
+  min-height: 360px;
   height: 360px;
 }
 .empty-state {
