@@ -25,6 +25,28 @@
             <button v-else @click="savePatient" class="btn-save-patient">➕ 保存为新患者</button>
           </div>
 
+          <div class="import-card">
+            <div class="import-title">患者表格导入（Excel/CSV）</div>
+            <div class="import-row">
+              <select v-model="patientImportFormat">
+                <option value="xlsx">xlsx</option>
+                <option value="csv">csv</option>
+              </select>
+              <button class="btn-import ghost" @click="downloadPatientTemplate">下载患者模板</button>
+            </div>
+            <div class="import-row">
+              <input type="file" accept=".xlsx,.xls,.csv" @change="onPatientImportFileChange" />
+              <button class="btn-import ghost" :disabled="!patientImportFile" @click="validatePatientTable">先校验</button>
+              <button class="btn-import" :disabled="!patientImportFile" @click="uploadPatientTable">上传并导入</button>
+            </div>
+            <div class="import-hint">建议先校验再导入；导入后会自动刷新患者列表。</div>
+            <div class="import-result" v-if="patientValidateSummary">{{ patientValidateSummary }}</div>
+            <div class="import-row" v-if="patientValidateErrors.length">
+              <button class="btn-import ghost" @click="downloadPatientErrorReport('xlsx')">导出错误清单(xlsx)</button>
+              <button class="btn-import ghost" @click="downloadPatientErrorReport('csv')">导出错误清单(csv)</button>
+            </div>
+          </div>
+
           <div class="form-grid">
             <div class="form-group">
               <label>姓名</label>
@@ -331,6 +353,10 @@ const checkForm = ref({
   result_value: '',
   unit: '',
 })
+const patientImportFormat = ref('xlsx')
+const patientImportFile = ref(null)
+const patientValidateSummary = ref('')
+const patientValidateErrors = ref([])
 
 const defaultPatient = () => ({
   name: '',
@@ -432,6 +458,14 @@ const loadRegimenList = async () => {
     }
   } catch (error) {
     console.error('加载方案模板失败:', error)
+  }
+}
+
+const safeJson = async (resp) => {
+  try {
+    return await resp.json()
+  } catch {
+    return {}
   }
 }
 
@@ -633,6 +667,117 @@ const addRegimenUsage = async () => {
   }
 }
 
+const onPatientImportFileChange = (event) => {
+  patientImportFile.value = event?.target?.files?.[0] || null
+}
+
+const downloadPatientTemplate = async () => {
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const resp = await fetch(
+      `${API_BASE}/import/template?entity=patients&format=${patientImportFormat.value}`,
+      { headers },
+    )
+    if (!resp.ok) return showToast('下载患者模板失败', 'error')
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `patients_import_template.${patientImportFormat.value}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('下载患者模板失败:', error)
+    showToast('下载患者模板失败', 'error')
+  }
+}
+
+const validatePatientTable = async () => {
+  if (!patientImportFile.value) return showToast('请先选择文件', 'info')
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const form = new FormData()
+    form.append('file', patientImportFile.value)
+    const resp = await fetch(`${API_BASE}/import/tabular/validate?entity=patients`, {
+      method: 'POST',
+      headers,
+      body: form,
+    })
+    if (resp.status === 401) return showToast('登录已失效，请重新登录', 'error')
+    const data = await safeJson(resp)
+    if (!data.success) return showToast(data.error || '预校验失败', 'error')
+    patientValidateSummary.value = `预校验：预计新增 ${data.would_create}，跳过 ${data.would_skip}，错误 ${data.errors?.length || 0}`
+    patientValidateErrors.value = Array.isArray(data.errors) ? data.errors : []
+    showToast('患者导入预校验完成', 'success')
+  } catch (error) {
+    console.error('患者导入预校验失败:', error)
+    showToast('患者导入预校验失败', 'error')
+  }
+}
+
+const uploadPatientTable = async () => {
+  if (!patientImportFile.value) return showToast('请先选择文件', 'info')
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const form = new FormData()
+    form.append('file', patientImportFile.value)
+    const resp = await fetch(`${API_BASE}/import/tabular?entity=patients`, {
+      method: 'POST',
+      headers,
+      body: form,
+    })
+    if (resp.status === 401) return showToast('登录已失效，请重新登录', 'error')
+    const data = await safeJson(resp)
+    if (!data.success) return showToast(data.error || '患者导入失败', 'error')
+    showToast(`导入完成：新增${data.created}，跳过${data.skipped}`, 'success')
+    patientImportFile.value = null
+    patientValidateSummary.value = ''
+    patientValidateErrors.value = []
+    await loadPatientsList()
+  } catch (error) {
+    console.error('患者导入失败:', error)
+    showToast('患者导入失败', 'error')
+  }
+}
+
+const downloadPatientErrorReport = async (fmt) => {
+  if (!patientValidateErrors.value.length) return showToast('当前没有错误清单', 'info')
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const resp = await fetch(`${API_BASE}/import/errors/export`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        entity: 'patients',
+        format: fmt,
+        errors: patientValidateErrors.value,
+      }),
+    })
+    if (!resp.ok) return showToast('导出错误清单失败', 'error')
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `patients_import_errors.${fmt}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('导出错误清单失败:', error)
+    showToast('导出错误清单失败', 'error')
+  }
+}
+
 watch(
   () => [patient.value.weight, patient.value.height],
   ([weight, height]) => {
@@ -697,6 +842,62 @@ watch(
   flex-direction: column;
   gap: 10px;
   margin-bottom: 12px;
+}
+.import-card {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px dashed rgba(102, 126, 234, 0.35);
+  border-radius: 10px;
+  background: rgba(238, 242, 255, 0.45);
+}
+.import-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #3730a3;
+  margin-bottom: 8px;
+}
+.import-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.import-row input,
+.import-row select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+}
+.btn-import {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-import.ghost {
+  background: #f8fafc;
+}
+.btn-import:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.import-hint {
+  font-size: 12px;
+  color: #475569;
+}
+.import-result {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  font-size: 12px;
+  color: #3730a3;
 }
 .patient-select {
   padding: 10px 12px;
@@ -818,6 +1019,9 @@ watch(
   }
   .record-form {
     grid-template-columns: 1fr;
+  }
+  .import-row {
+    flex-wrap: wrap;
   }
 }
 </style>

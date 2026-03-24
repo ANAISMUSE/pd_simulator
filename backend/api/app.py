@@ -2475,6 +2475,70 @@ def download_import_template():
     )
 
 
+@app.route('/api/import/errors/export', methods=['POST'])
+@auth_required
+def export_import_errors():
+    """
+    导出导入错误清单：
+    body: { entity, format, errors: [{row, error}] }
+    format: xlsx|csv
+    """
+    data = request.get_json(silent=True) or {}
+    entity = (data.get('entity') or 'unknown').strip().lower()
+    fmt = (data.get('format') or 'xlsx').strip().lower()
+    errors = data.get('errors') or []
+    if fmt not in ('xlsx', 'csv'):
+        return jsonify({'success': False, 'error': 'format must be xlsx or csv'}), 400
+    if not isinstance(errors, list):
+        return jsonify({'success': False, 'error': 'errors must be list'}), 400
+
+    rows = []
+    for idx, item in enumerate(errors, start=1):
+        row_no = None
+        message = ''
+        if isinstance(item, dict):
+            row_no = item.get('row')
+            message = str(item.get('error') or '')
+        else:
+            message = str(item)
+        rows.append({'index': idx, 'row': row_no, 'error': message})
+    if not rows:
+        rows.append({'index': 1, 'row': None, 'error': '无错误明细（空列表）'})
+
+    df = pd.DataFrame(rows, columns=['index', 'row', 'error'])
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+
+    if fmt == 'csv':
+        buf = io.StringIO()
+        df.to_csv(buf, index=False)
+        mem = io.BytesIO(buf.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        return send_file(
+            mem,
+            as_attachment=True,
+            download_name=f'{entity}_import_errors_{timestamp}.csv',
+            mimetype='text/csv',
+        )
+
+    out = io.BytesIO()
+    wb = Workbook()
+    ws = wb.active
+    if ws is None:
+        raise RuntimeError('failed to create worksheet')
+    ws.title = 'errors'
+    ws.append(['index', 'row', 'error'])
+    for item in rows:
+        ws.append([item['index'], item['row'], item['error']])
+    wb.save(out)
+    out.seek(0)
+    return send_file(
+        out,
+        as_attachment=True,
+        download_name=f'{entity}_import_errors_{timestamp}.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
 def run_genetic_optimization(mode: str):
     """封装新的遗传算法优化入口"""
     try:

@@ -2,15 +2,59 @@
   <div class="page">
     <div class="header">
       <div class="title">协作与记录中心</div>
-      <div class="subtitle">医院/医生协作申请、患者检查、生化与方案使用记录</div>
+      <div class="subtitle">按步骤完成导入、协作申请和患者记录，避免“填了但不知道下一步”</div>
     </div>
+
+    <section class="card guide">
+      <h3>推荐操作顺序</h3>
+      <div class="steps">
+        <div class="step"><span>1</span> 先下载模板并填写</div>
+        <div class="step"><span>2</span> 上传文件并先校验</div>
+        <div class="step"><span>3</span> 无严重错误后再导入</div>
+        <div class="step"><span>4</span> 导入后进行协作申请和记录维护</div>
+      </div>
+    </section>
 
     <div class="grid">
       <section class="card">
-        <h3>医院与医疗组</h3>
+        <h3>① 医生表格导入（Excel/CSV）</h3>
+        <div class="hint">此处仅导入医生数据；患者导入已移动到“患者管理”页面。</div>
+        <div class="row">
+          <select v-model="importEntity">
+            <option value="doctors">导入医生</option>
+          </select>
+          <select v-model="importFormat">
+            <option value="xlsx">xlsx</option>
+            <option value="csv">csv</option>
+          </select>
+          <button class="btn ghost" :disabled="busy" @click="downloadTemplate">下载模板</button>
+        </div>
+        <div class="row">
+          <input type="file" @change="onImportFileChange" accept=".xlsx,.xls,.csv" />
+          <button class="btn ghost" :disabled="!importFile || busy" @click="validateTable">先校验</button>
+          <button class="btn" :disabled="!importFile || busy" @click="uploadTable">上传并导入</button>
+        </div>
+        <div class="hint">支持 `.xlsx/.xls/.csv`，字段支持中英文别名。</div>
+        <div class="result-box" v-if="validateSummary">{{ validateSummary }}</div>
+
+        <div class="row" v-if="validateErrors.length">
+          <button class="btn ghost" @click="downloadErrorReport('xlsx')">导出错误清单(xlsx)</button>
+          <button class="btn ghost" @click="downloadErrorReport('csv')">导出错误清单(csv)</button>
+        </div>
+        <div class="error-preview" v-if="validateErrors.length">
+          <div class="list-title">校验错误预览（前20条）</div>
+          <div class="error-item" v-for="(item, idx) in validateErrors.slice(0, 20)" :key="idx">
+            第 {{ item.row || '-' }} 行：{{ item.error || '未知错误' }}
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>② 医院与医疗组维护</h3>
+        <div class="hint">先维护组织结构，再进行医生筛选和协作申请会更准确。</div>
         <div class="row">
           <input v-model.trim="newHospitalName" placeholder="新增医院名称" />
-          <button class="btn" @click="createHospital">新增医院</button>
+          <button class="btn" :disabled="busy" @click="createHospital">新增医院</button>
         </div>
         <div class="row">
           <select v-model.number="groupHospitalId">
@@ -18,34 +62,12 @@
             <option v-for="h in hospitals" :key="h.id" :value="h.id">{{ h.name }}</option>
           </select>
           <input v-model.trim="newGroupName" placeholder="新增医疗组名称" />
-          <button class="btn" @click="createGroup">新增医疗组</button>
+          <button class="btn" :disabled="busy" @click="createGroup">新增医疗组</button>
         </div>
       </section>
 
       <section class="card">
-        <h3>表格导入（Excel/CSV）</h3>
-        <div class="row">
-          <select v-model="importEntity">
-            <option value="patients">导入患者</option>
-            <option value="doctors">导入医生</option>
-          </select>
-          <select v-model="importFormat">
-            <option value="xlsx">xlsx</option>
-            <option value="csv">csv</option>
-          </select>
-          <button class="btn ghost" @click="downloadTemplate">下载模板</button>
-        </div>
-        <div class="row">
-          <input type="file" @change="onImportFileChange" accept=".xlsx,.xls,.csv" />
-          <button class="btn ghost" :disabled="!importFile" @click="validateTable">先校验</button>
-          <button class="btn" :disabled="!importFile" @click="uploadTable">上传并导入</button>
-        </div>
-        <div class="list-title">支持 .xlsx/.xls/.csv，字段支持中英文别名</div>
-        <div class="list-title" v-if="validateSummary">{{ validateSummary }}</div>
-      </section>
-
-      <section class="card">
-        <h3>跨医生访问申请</h3>
+        <h3>③ 跨医生访问申请</h3>
         <div class="row">
           <select v-model.number="doctorFilterHospitalId" @change="onFilterHospitalChange">
             <option :value="0">按医院筛选医生</option>
@@ -80,7 +102,7 @@
       </section>
 
       <section class="card">
-        <h3>患者检查记录</h3>
+        <h3>④ 患者记录维护</h3>
         <div class="row">
           <select v-model.number="selectedPatientId" @change="loadPatientRecords">
             <option :value="0">选择患者</option>
@@ -91,15 +113,11 @@
           <input v-model.trim="checkForm.unit" placeholder="单位" />
           <button class="btn" @click="addCheck">新增检查</button>
         </div>
-        <div class="list">
+        <div class="list mini">
           <div v-for="c in checks" :key="c.id" class="list-item">
             {{ c.checked_at }} | {{ c.project_name }}: {{ c.result_value || '-' }} {{ c.unit || '' }}
           </div>
         </div>
-      </section>
-
-      <section class="card">
-        <h3>患者方案使用记录 + 统计模型</h3>
         <div class="row">
           <select v-model.number="usageTemplateId">
             <option :value="0">模板（可选）</option>
@@ -116,7 +134,7 @@
           class="json"
           placeholder='方案快照 JSON，例如 {"phases":[{"phase_name":"夜间","duration":8,"glucose_conc":1.5,"fill_volume":2.0}]}'
         />
-        <div class="list">
+        <div class="list mini">
           <div v-for="u in usages" :key="u.id" class="list-item">
             记录#{{ u.id }} 模板: {{ u.template_id || '无' }} 升级模板: {{ u.promoted_template_id || '无' }}
           </div>
@@ -165,16 +183,37 @@ const usageTemplateId = ref(0)
 const promoteAsTemplate = ref(false)
 const usageSnapshotText = ref('{"phases":[]}')
 const modelName = ref('PD-Stats-v1')
-const importEntity = ref('patients')
+const importEntity = ref('doctors')
 const importFormat = ref('xlsx')
 const importFile = ref(null)
 const validateSummary = ref('')
+const validateErrors = ref([])
+const busy = ref(false)
 
 const safeJson = async (resp) => {
   try {
     return await resp.json()
   } catch {
     return { success: false, error: 'bad response' }
+  }
+}
+
+const requestJson = async (url, options = {}, fallback = '请求失败') => {
+  try {
+    const resp = await fetch(url, options)
+    if (resp.status === 401) {
+      showToast('登录已失效，请重新登录', 'error')
+      return { success: false, error: 'unauthorized' }
+    }
+    const data = await safeJson(resp)
+    if (!data.success && data.error) {
+      showToast(data.error, 'error')
+    }
+    return data
+  } catch (e) {
+    console.error(e)
+    showToast(`${fallback}（后端可能未启动）`, 'error')
+    return { success: false, error: fallback }
   }
 }
 
@@ -228,27 +267,38 @@ const onFilterHospitalChange = async () => {
 
 const createHospital = async () => {
   if (!newHospitalName.value) return showToast('请填写医院名称', 'info')
-  const resp = await fetch(`${API_BASE}/hospitals`, {
-    method: 'POST',
-    headers: jsonHeaders(),
-    body: JSON.stringify({ name: newHospitalName.value }),
-  })
-  const data = await safeJson(resp)
-  if (!data.success) return showToast(data.error || '新增医院失败', 'error')
-  newHospitalName.value = ''
-  await loadBase()
-  showToast('医院已新增', 'success')
+  busy.value = true
+  try {
+    const data = await requestJson(
+      `${API_BASE}/hospitals`,
+      {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name: newHospitalName.value }),
+      },
+      '新增医院失败',
+    )
+    if (!data.success) return
+    newHospitalName.value = ''
+    await loadBase()
+    showToast('医院已新增', 'success')
+  } finally {
+    busy.value = false
+  }
 }
 
 const createGroup = async () => {
   if (!groupHospitalId.value || !newGroupName.value) return showToast('请选择医院并填写医疗组', 'info')
-  const resp = await fetch(`${API_BASE}/medical-groups`, {
-    method: 'POST',
-    headers: jsonHeaders(),
-    body: JSON.stringify({ hospital_id: groupHospitalId.value, name: newGroupName.value }),
-  })
-  const data = await safeJson(resp)
-  if (!data.success) return showToast(data.error || '新增医疗组失败', 'error')
+  const data = await requestJson(
+    `${API_BASE}/medical-groups`,
+    {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ hospital_id: groupHospitalId.value, name: newGroupName.value }),
+    },
+    '新增医疗组失败',
+  )
+  if (!data.success) return
   newGroupName.value = ''
   showToast('医疗组已新增', 'success')
 }
@@ -361,6 +411,7 @@ const uploadTable = async () => {
   showToast(`导入完成：新增${data.created}，更新${data.updated}，跳过${data.skipped}`, 'success')
   importFile.value = null
   validateSummary.value = ''
+  validateErrors.value = []
   await loadBase()
 }
 
@@ -376,6 +427,7 @@ const validateTable = async () => {
   const data = await safeJson(resp)
   if (!data.success) return showToast(data.error || '预校验失败', 'error')
   validateSummary.value = `预校验：预计新增 ${data.would_create}，更新 ${data.would_update}，跳过 ${data.would_skip}，错误 ${data.errors?.length || 0}`
+  validateErrors.value = Array.isArray(data.errors) ? data.errors : []
   showToast('预校验完成', 'success')
 }
 
@@ -394,6 +446,29 @@ const downloadTemplate = async () => {
   URL.revokeObjectURL(objectUrl)
 }
 
+const downloadErrorReport = async (fmt) => {
+  if (!validateErrors.value.length) return showToast('当前没有错误清单', 'info')
+  const resp = await fetch(`${API_BASE}/import/errors/export`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      entity: importEntity.value,
+      format: fmt,
+      errors: validateErrors.value,
+    }),
+  })
+  if (!resp.ok) return showToast('导出错误清单失败', 'error')
+  const blob = await resp.blob()
+  const link = document.createElement('a')
+  const objectUrl = URL.createObjectURL(blob)
+  link.href = objectUrl
+  link.download = `${importEntity.value}_import_errors.${fmt}`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 onMounted(loadBase)
 </script>
 
@@ -404,16 +479,32 @@ onMounted(loadBase)
 .subtitle { margin-top: 6px; font-size: 13px; color: rgba(31, 35, 64, 0.65); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .card { background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; padding: 14px; }
-.row { display: flex; gap: 8px; margin-bottom: 8px; }
+.guide { margin-bottom: 14px; }
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.step { background: #f8fafc; border: 1px solid rgba(0,0,0,0.06); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: #334155; }
+.step span { display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 999px; background: #4f46e5; color: #fff; font-size: 11px; margin-right: 6px; }
+.hint { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.result-box { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: #eef2ff; border: 1px solid #c7d2fe; font-size: 12px; color: #3730a3; }
+.row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .row input, .row select { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; }
-.btn { padding: 8px 10px; border: 1px solid rgba(0,0,0,0.14); border-radius: 8px; background: #fff; cursor: pointer; font-weight: 700; }
+.btn { padding: 8px 10px; border: 1px solid rgba(0,0,0,0.14); border-radius: 8px; background: #fff; cursor: pointer; font-weight: 700; white-space: nowrap; }
 .btn.ghost { background: #f8fafc; }
 .inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; }
 .list { max-height: 210px; overflow: auto; border-top: 1px dashed rgba(0,0,0,0.08); padding-top: 8px; }
+.list.mini { max-height: 130px; }
 .list-title { font-size: 12px; color: #475569; margin-bottom: 6px; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.06); }
 .item-actions { display: flex; gap: 6px; }
 .days { width: 130px; flex: 0 0 130px !important; }
 .json { width: 100%; min-height: 80px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; font-family: Consolas, monospace; font-size: 12px; }
-@media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+.error-preview { margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(0,0,0,0.08); }
+.error-item { font-size: 12px; color: #9f1239; padding: 4px 0; }
+@media (max-width: 1200px) {
+  .grid { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 780px) {
+  .row { flex-wrap: wrap; }
+  .steps { grid-template-columns: 1fr; }
+}
 </style>
