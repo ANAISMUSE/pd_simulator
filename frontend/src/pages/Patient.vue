@@ -264,6 +264,50 @@
             </div>
           </div>
         </div>
+
+        <div class="section-card">
+          <h2>🧾 检查记录</h2>
+          <div class="record-form">
+            <input v-model.trim="checkForm.project_name" type="text" placeholder="检查项目（如：血钾）" />
+            <input v-model.trim="checkForm.result_value" type="text" placeholder="结果值" />
+            <input v-model.trim="checkForm.unit" type="text" placeholder="单位" />
+            <button class="btn-save-patient" @click="addCheckRecord">新增检查</button>
+          </div>
+          <div class="record-list">
+            <div v-for="item in checkRecords" :key="item.id" class="record-item">
+              <span>{{ item.checked_at }} | {{ item.project_name }}</span>
+              <span>{{ item.result_value || '-' }} {{ item.unit || '' }}</span>
+            </div>
+            <div v-if="!checkRecords.length" class="record-empty">暂无检查记录</div>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <h2>📚 方案使用历史</h2>
+          <div class="record-form">
+            <select v-model.number="usageTemplateId">
+              <option :value="0">选择模板（可选）</option>
+              <option v-for="item in regimenList" :key="item.id" :value="item.id">{{ item.name }}</option>
+            </select>
+            <label class="share-label">
+              <input v-model="promoteAsTemplate" type="checkbox" />
+              <span>将本次改动升级为新模板</span>
+            </label>
+            <button class="btn-save-patient" @click="addRegimenUsage">新增使用记录</button>
+          </div>
+          <textarea
+            v-model="usageSnapshotText"
+            class="usage-json"
+            placeholder='方案快照 JSON，例如 {"phases":[{"phase_name":"夜间","duration":8,"glucose_conc":1.5,"fill_volume":2.0}]}'
+          />
+          <div class="record-list">
+            <div v-for="item in regimenUsages" :key="item.id" class="record-item">
+              <span>记录#{{ item.id }} 模板: {{ item.template_id || '无' }}</span>
+              <span>升级模板: {{ item.promoted_template_id || '无' }}</span>
+            </div>
+            <div v-if="!regimenUsages.length" class="record-empty">暂无方案使用记录</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -276,6 +320,17 @@ const API_BASE = 'http://localhost:5000/api'
 
 const patientsList = ref([])
 const selectedPatientId = ref(null)
+const checkRecords = ref([])
+const regimenUsages = ref([])
+const regimenList = ref([])
+const usageTemplateId = ref(0)
+const promoteAsTemplate = ref(false)
+const usageSnapshotText = ref('{"phases":[]}')
+const checkForm = ref({
+  project_name: '',
+  result_value: '',
+  unit: '',
+})
 
 const defaultPatient = () => ({
   name: '',
@@ -351,6 +406,7 @@ const loadFromStorage = () => {
 onMounted(async () => {
   loadFromStorage()
   await loadPatientsList()
+  await loadRegimenList()
 })
 
 const loadPatientsList = async () => {
@@ -367,12 +423,26 @@ const loadPatientsList = async () => {
   }
 }
 
+const loadRegimenList = async () => {
+  try {
+    const response = await fetch(`${API_BASE}/regimens`)
+    const data = await response.json()
+    if (data.success) {
+      regimenList.value = data.regimens || []
+    }
+  } catch (error) {
+    console.error('加载方案模板失败:', error)
+  }
+}
+
 import { showToast } from '../utils/toast'
 
 const loadPatientData = async () => {
   if (!selectedPatientId.value) {
     patient.value = defaultPatient()
     biomarkers.value = defaultBiomarkers()
+    checkRecords.value = []
+    regimenUsages.value = []
     saveCurrentToStorage()
     return
   }
@@ -401,11 +471,30 @@ const loadPatientData = async () => {
       }
       biomarkers.value = p.biomarkers
       saveCurrentToStorage()
+      await loadPatientRecords()
       showToast(`已加载患者：${p.name}`, 'success')
     }
   } catch (error) {
     console.error('加载患者数据失败:', error)
     showToast('加载患者数据失败', 'error')
+  }
+}
+
+const loadPatientRecords = async () => {
+  if (!selectedPatientId.value) return
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const [checksResp, usagesResp] = await Promise.all([
+      fetch(`${API_BASE}/patients/${selectedPatientId.value}/checks`, { headers }),
+      fetch(`${API_BASE}/patients/${selectedPatientId.value}/regimen-usages`, { headers }),
+    ])
+    const checksData = await checksResp.json().catch(() => ({}))
+    const usagesData = await usagesResp.json().catch(() => ({}))
+    checkRecords.value = checksData.checks || []
+    regimenUsages.value = usagesData.usages || []
+  } catch (error) {
+    console.error('加载患者记录失败:', error)
   }
 }
 
@@ -483,6 +572,64 @@ const deletePatient = async () => {
   } catch (error) {
     console.error('删除患者失败:', error)
     showToast('删除患者失败', 'error')
+  }
+}
+
+const addCheckRecord = async () => {
+  if (!selectedPatientId.value) return showToast('请先选择患者', 'info')
+  if (!checkForm.value.project_name.trim()) return showToast('请填写检查项目', 'info')
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/checks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(checkForm.value),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!data.success) return showToast(data.error || '新增检查失败', 'error')
+    checkForm.value = { project_name: '', result_value: '', unit: '' }
+    await loadPatientRecords()
+    showToast('检查记录已新增', 'success')
+  } catch (error) {
+    console.error('新增检查失败:', error)
+    showToast('新增检查失败', 'error')
+  }
+}
+
+const addRegimenUsage = async () => {
+  if (!selectedPatientId.value) return showToast('请先选择患者', 'info')
+  let snapshot = {}
+  try {
+    snapshot = JSON.parse(usageSnapshotText.value || '{}')
+  } catch {
+    return showToast('方案快照 JSON 格式错误', 'error')
+  }
+  try {
+    const token = localStorage.getItem('pd_token') || ''
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/regimen-usages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        template_id: usageTemplateId.value || null,
+        regimen_snapshot: snapshot,
+        promote_as_template: promoteAsTemplate.value,
+      }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!data.success) return showToast(data.error || '新增方案使用记录失败', 'error')
+    await loadPatientRecords()
+    showToast('方案使用记录已新增', 'success')
+  } catch (error) {
+    console.error('新增方案使用记录失败:', error)
+    showToast('新增方案使用记录失败', 'error')
   }
 }
 
@@ -630,8 +777,46 @@ watch(
   color: #667eea;
   margin-bottom: 10px;
 }
+.record-form {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 0.8fr auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.record-list {
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+  padding-top: 8px;
+  max-height: 190px;
+  overflow: auto;
+}
+.record-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed rgba(0, 0, 0, 0.06);
+}
+.record-empty {
+  font-size: 12px;
+  color: rgba(31, 35, 64, 0.6);
+  padding: 8px 0;
+}
+.usage-json {
+  width: 100%;
+  min-height: 78px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
 @media (max-width: 1024px) {
   .main {
+    grid-template-columns: 1fr;
+  }
+  .record-form {
     grid-template-columns: 1fr;
   }
 }

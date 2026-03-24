@@ -236,6 +236,102 @@
       </div>
     </div>
 
+    <div class="section-card research-card">
+      <h2>🧪 三孔模型研究</h2>
+      <div class="research-grid">
+        <div class="research-block">
+          <h3>1) 个体化建模</h3>
+          <div class="mini-grid">
+            <input v-model.number="modelingInput.pet.d0.creatinine" type="number" placeholder="0h透析液肌酐" />
+            <input v-model.number="modelingInput.pet.d0.glucose" type="number" placeholder="0h透析液葡萄糖" />
+            <input v-model.number="modelingInput.pet.d0.urea" type="number" placeholder="0h透析液尿素" />
+            <input v-model.number="modelingInput.pet.d2.creatinine" type="number" placeholder="2h透析液肌酐" />
+            <input v-model.number="modelingInput.pet.d2.glucose" type="number" placeholder="2h透析液葡萄糖" />
+            <input v-model.number="modelingInput.pet.d2.urea" type="number" placeholder="2h透析液尿素" />
+            <input v-model.number="modelingInput.pet.d4.creatinine" type="number" placeholder="4h透析液肌酐" />
+            <input v-model.number="modelingInput.pet.d4.glucose" type="number" placeholder="4h透析液葡萄糖" />
+            <input v-model.number="modelingInput.pet.d4.urea" type="number" placeholder="4h透析液尿素" />
+            <input v-model.number="modelingInput.blood_2h.creatinine" type="number" placeholder="2h血肌酐" />
+            <input v-model.number="modelingInput.blood_2h.urea" type="number" placeholder="2h血尿素" />
+            <input v-model.number="modelingInput.blood_2h.glucose" type="number" placeholder="2h血葡萄糖" />
+            <input v-model.number="modelingInput.blood_2h.sodium" type="number" placeholder="2h血钠" />
+            <input v-model.number="modelingInput.urine_24h.urine_volume_24h_ml" type="number" placeholder="24h尿量(ml)" />
+            <input v-model.number="modelingInput.urine_24h.urine_urea" type="number" placeholder="24h尿尿素" />
+            <input v-model.number="modelingInput.urine_24h.urine_creatinine" type="number" placeholder="24h尿肌酐" />
+          </div>
+          <button class="btn-primary" @click="runIndividualizedModeling">运行个体化建模</button>
+          <div v-if="individualizedResult" class="research-chart-wrap">
+            <div ref="individualizedChartEl" class="research-chart"></div>
+          </div>
+          <div v-if="individualizedResult" class="research-result">
+            <div>转运类型：{{ individualizedResult.transport_type }}</div>
+            <div>残肾Kt/V：{{ individualizedResult.renal_ktv }}</div>
+            <div>残肾肌酐清除率(L/day)：{{ individualizedResult.renal_creatinine_clearance_l_day }}</div>
+            <div>1h钠筛：{{ individualizedResult.sodium_sieving_1h }}</div>
+            <div>腹腔残余液体量(ml)：{{ individualizedResult.residual_intraperitoneal_volume_ml }}</div>
+          </div>
+        </div>
+
+        <div class="research-block">
+          <h3>2) 单次腹透模拟</h3>
+          <div class="mini-grid">
+            <select v-model="singleInput.solution_type">
+              <option value="glucose">葡萄糖</option>
+              <option value="amino_acid">氨基酸</option>
+              <option value="icodextrin">艾考糊精</option>
+            </select>
+            <input v-model.number="singleInput.concentration_pct" type="number" step="0.1" placeholder="浓度(%)" />
+            <input v-model.number="singleInput.fill_volume_l" type="number" step="0.1" placeholder="灌注量(L)" />
+            <input v-model.number="singleInput.dwell_minutes" type="number" placeholder="留腹时间(分钟)" />
+            <input v-model.number="singleInput.drain_minutes" type="number" placeholder="引流时间(分钟)" />
+          </div>
+          <button class="btn-primary" @click="runSingleExchange">运行单次模拟</button>
+          <div v-if="singleResult?.time_series" class="research-chart-wrap">
+            <div ref="singleChartEl" class="research-chart"></div>
+          </div>
+          <div v-if="singleResult?.summary" class="research-result">
+            <div>尿素清除：{{ singleResult.summary.urea_clearance }}</div>
+            <div>β2M清除：{{ singleResult.summary.beta2m_clearance }}</div>
+            <div>小孔超滤：{{ singleResult.summary.uf_small_pore }}</div>
+            <div>超小孔超滤：{{ singleResult.summary.uf_ultrasmall_pore }}</div>
+          </div>
+        </div>
+
+        <div class="research-block">
+          <h3>3) 24小时连续透析</h3>
+          <div class="cycle-list">
+            <div class="cycle-item" v-for="(c, idx) in continuousInput.cycles" :key="idx">
+              <span class="cycle-title">循环{{ idx + 1 }}</span>
+              <select v-model="c.solution_type">
+                <option value="glucose">葡萄糖</option>
+                <option value="amino_acid">氨基酸</option>
+                <option value="icodextrin">艾考糊精</option>
+              </select>
+              <input v-model.number="c.concentration_pct" type="number" step="0.1" placeholder="浓度(%)" />
+              <input v-model.number="c.fill_volume_l" type="number" step="0.1" placeholder="灌注量(L)" />
+              <input v-model.number="c.dwell_minutes" type="number" placeholder="留腹时间(分钟)" />
+              <button class="btn-mini" @click="removeCycle(idx)" :disabled="continuousInput.cycles.length <= 1">删</button>
+            </div>
+          </div>
+          <div class="cycle-actions">
+            <input v-model.number="continuousInput.drain_minutes" type="number" placeholder="引流时间(分钟)" />
+            <button class="btn-secondary" @click="addCycle">+ 添加循环</button>
+            <button class="btn-primary" @click="runContinuous24h">运行24h模拟</button>
+          </div>
+          <div v-if="continuousResult?.cycles?.length" class="research-chart-wrap">
+            <div ref="continuousChartEl" class="research-chart"></div>
+          </div>
+          <div v-if="continuousResult" class="research-result">
+            <div>总腹腔Kt/V：{{ continuousResult.total_peritoneal_ktv }}</div>
+            <div>总Kt/V：{{ continuousResult.total_ktv }}</div>
+            <div>肌酐清除率：{{ continuousResult.creatinine_clearance }}</div>
+            <div>β2M清除：{{ continuousResult.beta2m_clearance }}</div>
+            <div>总超滤：{{ continuousResult.total_uf }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showCustomDialog" class="modal-overlay" @click.self="showCustomDialog = false">
       <div class="modal-content">
         <div class="modal-header">
@@ -324,8 +420,15 @@ const showCustomDialog = ref(false)
 
 const mainChartEl = ref(null)
 const compareChartEl = ref(null)
+const individualizedChartEl = ref(null)
+const singleChartEl = ref(null)
+const continuousChartEl = ref(null)
 let mainChart = null
 let compareChart = null
+let individualizedChart = null
+let singleChart = null
+let continuousChart = null
+let mainChartTimer = null
 
 // 患者选择（仅用于本页模拟）
 const patientsList = ref([])
@@ -338,6 +441,38 @@ const customRegimen = ref({
   phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
 })
 const editingRegimenId = ref(null)
+
+const modelingInput = ref({
+  pet: {
+    d0: { creatinine: 120, glucose: 126, urea: 10 },
+    d2: { creatinine: 380, glucose: 90, urea: 8 },
+    d4: { creatinine: 520, glucose: 70, urea: 6 },
+  },
+  blood_2h: { creatinine: 884, urea: 25.3, glucose: 5.5, sodium: 138 },
+  urine_24h: { urine_volume_24h_ml: 500, urine_urea: 12, urine_creatinine: 9 },
+})
+const individualizedResult = ref(null)
+
+const singleInput = ref({
+  solution_type: 'glucose',
+  concentration_pct: 1.5,
+  dwell_minutes: 360,
+  fill_volume_l: 2.0,
+  drain_minutes: 7,
+})
+const singleResult = ref(null)
+
+const defaultCycle = () => ({
+  solution_type: 'glucose',
+  concentration_pct: 1.5,
+  fill_volume_l: 2.0,
+  dwell_minutes: 360,
+})
+const continuousInput = ref({
+  drain_minutes: 7,
+  cycles: [defaultCycle(), defaultCycle(), defaultCycle()],
+})
+const continuousResult = ref(null)
 
 const loadPatientPayload = () => {
   // 严格要求：必须在本页上方明确选择一个患者
@@ -538,7 +673,7 @@ const saveCustomRegimen = () => {
     if (last) selectedPresets.value = [`custom_${last.id}`]
   }
   showCustomDialog.value = false
-  showToast(`自定义方案 "${newRegimen.name}" 已保存`, 'success')
+  showToast(`自定义方案 "${customRegimen.value.name}" 已保存`, 'success')
   customRegimen.value = {
     name: '',
     phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
@@ -558,6 +693,234 @@ const editCustomRegimen = (regimen) => {
     })),
   }
   showCustomDialog.value = true
+}
+
+const runIndividualizedModeling = async () => {
+  const payload = loadPatientPayload()
+  if (!payload) return
+  try {
+    const resp = await fetch(`${API_BASE}/modeling/individualized`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patient: payload.patient,
+        pet: modelingInput.value.pet,
+        blood_2h: modelingInput.value.blood_2h,
+        urine_24h: modelingInput.value.urine_24h,
+      }),
+    })
+    const data = await resp.json().catch(() => ({}))
+    if (!data.success) {
+      showToast(data.error || '个体化建模失败', 'error')
+      return
+    }
+    individualizedResult.value = data.result || null
+    await nextTick()
+    renderIndividualizedChart()
+    showToast('个体化建模完成', 'success')
+  } catch (e) {
+    console.error(e)
+    showToast('个体化建模失败', 'error')
+  }
+}
+
+const runSingleExchange = async () => {
+  const payload = loadPatientPayload()
+  if (!payload) return
+  try {
+    const resp = await fetch(`${API_BASE}/simulate/single-exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patient: payload.patient,
+        biomarkers: payload.biomarkers,
+        ...singleInput.value,
+      }),
+    })
+    const data = await resp.json().catch(() => ({}))
+    if (!data.success) {
+      showToast(data.error || '单次模拟失败', 'error')
+      return
+    }
+    singleResult.value = data.result || null
+    await nextTick()
+    renderSingleExchangeChart()
+    showToast('单次模拟完成', 'success')
+  } catch (e) {
+    console.error(e)
+    showToast('单次模拟失败', 'error')
+  }
+}
+
+const addCycle = () => {
+  continuousInput.value.cycles.push(defaultCycle())
+}
+
+const removeCycle = (idx) => {
+  if (continuousInput.value.cycles.length <= 1) return
+  continuousInput.value.cycles.splice(idx, 1)
+}
+
+const runContinuous24h = async () => {
+  const payload = loadPatientPayload()
+  if (!payload) return
+  try {
+    const resp = await fetch(`${API_BASE}/simulate/continuous-24h`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patient: payload.patient,
+        biomarkers: payload.biomarkers,
+        drain_minutes: continuousInput.value.drain_minutes,
+        cycles: continuousInput.value.cycles,
+        urine_24h: modelingInput.value.urine_24h,
+      }),
+    })
+    const data = await resp.json().catch(() => ({}))
+    if (!data.success) {
+      showToast(data.error || '24小时模拟失败', 'error')
+      return
+    }
+    continuousResult.value = data.result || null
+    await nextTick()
+    renderContinuousChart()
+    showToast('24小时连续模拟完成', 'success')
+  } catch (e) {
+    console.error(e)
+    showToast('24小时模拟失败', 'error')
+  }
+}
+
+const renderIndividualizedChart = () => {
+  if (!individualizedChartEl.value || !individualizedResult.value) return
+  if (!individualizedChart) individualizedChart = echarts.init(individualizedChartEl.value)
+
+  const r = individualizedResult.value
+  const values = [
+    Number(r.renal_ktv || 0),
+    Number(r.renal_creatinine_clearance_l_day || 0),
+    Number(r.sodium_sieving_1h || 0),
+    Number((r.residual_intraperitoneal_volume_ml || 0) / 100),
+  ]
+  const indicator = [
+    { name: '残肾Kt/V', max: 2 },
+    { name: '残肾肌酐清除', max: 20 },
+    { name: '1h钠筛', max: 20 },
+    { name: '残余液体量/100', max: 10 },
+  ]
+
+  individualizedChart.setOption(
+    {
+      backgroundColor: '#fff',
+      tooltip: {},
+      radar: {
+        indicator,
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
+        splitArea: { areaStyle: { color: ['#fff', '#f8fafc'] } },
+        axisLine: { lineStyle: { color: '#cbd5e1' } },
+      },
+      series: [
+        {
+          type: 'radar',
+          data: [{ value: values, name: '个体化评估' }],
+          lineStyle: { color: '#4f46e5', width: 2 },
+          areaStyle: { color: 'rgba(79,70,229,0.18)' },
+          symbol: 'circle',
+          symbolSize: 6,
+        },
+      ],
+    },
+    true,
+  )
+}
+
+const renderSingleExchangeChart = () => {
+  if (!singleChartEl.value || !singleResult.value?.time_series) return
+  if (!singleChart) singleChart = echarts.init(singleChartEl.value)
+
+  const ts = singleResult.value.time_series
+  const time = (ts.time_min || []).map((t) => Number(t).toFixed(0))
+  const volume = ts.volume_l || []
+  const urea = ts.urea_clearance_rate || []
+  const beta2 = ts.beta2m_clearance_rate || []
+
+  let reveal = 1
+  const total = time.length
+  const step = Math.max(1, Math.floor(total / 150))
+
+  const optionFor = (count) => ({
+    backgroundColor: '#fff',
+    tooltip: { trigger: 'axis' },
+    grid: { left: 45, right: 55, top: 30, bottom: 36 },
+    xAxis: {
+      type: 'category',
+      data: time.slice(0, count),
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: '#64748b' } },
+      axisLabel: { color: '#64748b' },
+      name: '分钟',
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: '体积(L)',
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
+      },
+      {
+        type: 'value',
+        name: '清除率',
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      { name: '腹腔液体积', type: 'line', smooth: true, showSymbol: false, data: volume.slice(0, count), lineStyle: { width: 2, color: '#4f46e5' } },
+      { name: '尿素清除率', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false, data: urea.slice(0, count), lineStyle: { width: 2, color: '#06b6d4' } },
+      { name: 'β2M清除率', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false, data: beta2.slice(0, count), lineStyle: { width: 2, color: '#f97316' } },
+    ],
+  })
+
+  singleChart.setOption(optionFor(reveal), true)
+  const timer = setInterval(() => {
+    if (!singleChart) return clearInterval(timer)
+    reveal += step
+    if (reveal >= total) {
+      reveal = total
+      clearInterval(timer)
+    }
+    singleChart.setOption(optionFor(reveal), false)
+  }, 35)
+}
+
+const renderContinuousChart = () => {
+  if (!continuousChartEl.value || !continuousResult.value?.cycles?.length) return
+  if (!continuousChart) continuousChart = echarts.init(continuousChartEl.value)
+
+  const cycles = continuousResult.value.cycles || []
+  const labels = cycles.map((c) => `循环${c.cycle}`)
+  const ktv = cycles.map((c) => Number(c.summary?.peritoneal_ktv || 0))
+  const uf = cycles.map((c) => Number(c.summary?.uf_total || 0))
+  const beta2 = cycles.map((c) => Number(c.summary?.beta2m_clearance || 0))
+
+  continuousChart.setOption(
+    {
+      backgroundColor: '#fff',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 6, data: ['循环Kt/V', '循环超滤', 'β2M清除'] },
+      grid: { left: 45, right: 45, top: 34, bottom: 36 },
+      xAxis: { type: 'category', data: labels, axisLabel: { color: '#64748b' }, axisLine: { lineStyle: { color: '#64748b' } } },
+      yAxis: { type: 'value', axisLabel: { color: '#64748b' }, axisLine: { lineStyle: { color: '#64748b' } }, splitLine: { lineStyle: { color: '#e2e8f0' } } },
+      series: [
+        { name: '循环Kt/V', type: 'bar', data: ktv, itemStyle: { color: '#4f46e5' } },
+        { name: '循环超滤', type: 'bar', data: uf, itemStyle: { color: '#06b6d4' } },
+        { name: 'β2M清除', type: 'line', smooth: true, showSymbol: false, data: beta2, lineStyle: { color: '#f97316', width: 2 } },
+      ],
+    },
+    true,
+  )
 }
 
 const deleteCustomRegimen = (id) => {
@@ -724,9 +1087,12 @@ const renderMainChart = () => {
   const crea = ts.creatinine_clearance || []
   const urea = ts.urea_clearance || []
 
-  if (!mainChart) {
+  // v-if 切换后 DOM 会重建，旧实例需要重建绑定
+  if (!mainChart || mainChart.getDom() !== mainChartEl.value) {
+    if (mainChart) mainChart.dispose()
     mainChart = echarts.init(mainChartEl.value)
   }
+  mainChart.resize()
 
   let reveal = 1
   const total = allLabels.length
@@ -793,15 +1159,21 @@ const renderMainChart = () => {
 
   mainChart.setOption(buildOption(reveal), true)
 
-  const timer = setInterval(() => {
+  if (mainChartTimer) {
+    clearInterval(mainChartTimer)
+    mainChartTimer = null
+  }
+  mainChartTimer = setInterval(() => {
     if (!mainChart) {
-      clearInterval(timer)
+      clearInterval(mainChartTimer)
+      mainChartTimer = null
       return
     }
     reveal += step
     if (reveal >= total) {
       reveal = total
-      clearInterval(timer)
+      clearInterval(mainChartTimer)
+      mainChartTimer = null
     }
     mainChart.setOption(buildOption(reveal), false)
   }, 40)
@@ -815,9 +1187,11 @@ const renderComparisonChart = () => {
   const ufData = comparisonResults.value.map((r) => r.summary.total_uf)
   const glucoseData = comparisonResults.value.map((r) => r.summary.total_glucose_absorbed)
 
-  if (!compareChart) {
+  if (!compareChart || compareChart.getDom() !== compareChartEl.value) {
+    if (compareChart) compareChart.dispose()
     compareChart = echarts.init(compareChartEl.value)
   }
+  compareChart.resize()
 
   compareChart.setOption(
     {
@@ -865,6 +1239,10 @@ const renderComparisonChart = () => {
 }
 
 onBeforeUnmount(() => {
+  if (mainChartTimer) {
+    clearInterval(mainChartTimer)
+    mainChartTimer = null
+  }
   if (mainChart) {
     mainChart.dispose()
     mainChart = null
@@ -872,6 +1250,18 @@ onBeforeUnmount(() => {
   if (compareChart) {
     compareChart.dispose()
     compareChart = null
+  }
+  if (individualizedChart) {
+    individualizedChart.dispose()
+    individualizedChart = null
+  }
+  if (singleChart) {
+    singleChart.dispose()
+    singleChart = null
+  }
+  if (continuousChart) {
+    continuousChart.dispose()
+    continuousChart = null
   }
 })
 </script>
@@ -1193,6 +1583,106 @@ onBeforeUnmount(() => {
   background: #fee2e2;
   color: #b91c1c;
 }
+.research-card {
+  margin-top: 14px;
+}
+.research-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.research-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+}
+.research-block h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.mini-grid input,
+.mini-grid select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  width: 100%;
+}
+.research-result {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #1f2937;
+  line-height: 1.6;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+}
+.research-chart-wrap {
+  margin-top: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+.research-chart {
+  width: 100%;
+  height: 240px;
+}
+.cycle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.cycle-item {
+  display: grid;
+  grid-template-columns: 56px 1fr 1fr 1fr 1fr 36px;
+  gap: 6px;
+  align-items: center;
+}
+.cycle-title {
+  font-size: 12px;
+  color: #475569;
+}
+.cycle-item input,
+.cycle-item select {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  width: 100%;
+}
+.cycle-actions {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.cycle-actions input {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.btn-mini {
+  border: 0;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #b91c1c;
+  padding: 5px 0;
+  cursor: pointer;
+}
+.btn-mini:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .empty-state {
   text-align: center;
   padding: 40px 10px;
@@ -1300,6 +1790,15 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
   .preset-buttons {
+    grid-template-columns: 1fr;
+  }
+  .research-grid {
+    grid-template-columns: 1fr;
+  }
+  .cycle-item {
+    grid-template-columns: 1fr;
+  }
+  .cycle-actions {
     grid-template-columns: 1fr;
   }
 }

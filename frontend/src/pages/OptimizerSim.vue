@@ -28,6 +28,21 @@
               <span class="k">时长(h)</span><span class="v">{{ (Number(baseline.summary.total_duration) / 60).toFixed(1) }}</span>
             </div>
           </div>
+          <div v-if="baseline" class="score-panel">
+            <div class="score-head">
+              <span>综合评分（0-100）</span>
+              <strong>{{ baselineCompositeScore.toFixed(1) }}</strong>
+            </div>
+            <div class="score-bar">
+              <div class="score-fill" :style="{ width: `${baselineCompositeScore}%` }"></div>
+            </div>
+            <div v-if="latestRound" class="score-sub">
+              最新轮次评分：{{ latestCompositeScore.toFixed(1) }}
+              <span :class="['delta', scoreDelta >= 0 ? 'up' : 'down']">
+                {{ scoreDelta >= 0 ? '+' : '' }}{{ scoreDelta.toFixed(1) }}
+              </span>
+            </div>
+          </div>
         </div>
 
         <div class="section-card">
@@ -48,6 +63,30 @@
             <div class="form-group">
               <label>迭代代数</label>
               <input v-model.number="generations" type="number" min="5" max="80" />
+            </div>
+          </div>
+          <div class="weight-box">
+            <div class="weight-title">综合评分权重（可调）</div>
+            <div class="weight-row">
+              <label>Kt/V</label>
+              <input v-model.number="scoreWeights.ktv" type="range" min="0" max="100" step="1" />
+              <span>{{ scoreWeights.ktv }}</span>
+            </div>
+            <div class="weight-row">
+              <label>UF</label>
+              <input v-model.number="scoreWeights.uf" type="range" min="0" max="100" step="1" />
+              <span>{{ scoreWeights.uf }}</span>
+            </div>
+            <div class="weight-row">
+              <label>葡萄糖</label>
+              <input v-model.number="scoreWeights.glucose" type="range" min="0" max="100" step="1" />
+              <span>{{ scoreWeights.glucose }}</span>
+            </div>
+            <div class="weight-hint">
+              已自动归一化：Kt/V {{ normalizedWeights.ktv.toFixed(2) }}，UF {{ normalizedWeights.uf.toFixed(2) }}，葡萄糖 {{ normalizedWeights.glucose.toFixed(2) }}
+            </div>
+            <div class="weight-actions">
+              <button class="btn-secondary" @click="resetScoreWeights">恢复默认权重(55/25/20)</button>
             </div>
           </div>
         </div>
@@ -173,6 +212,7 @@
                 <span>Kt/V={{ r.summary.total_ktv }}</span>
                 <span>UF={{ r.summary.total_uf }}</span>
                 <span>糖={{ r.summary.total_glucose_absorbed }}</span>
+                <span>评分={{ calcCompositeScore(r.summary).toFixed(1) }}</span>
                 <span>耗时={{ (Number(r.summary.total_duration) / 60).toFixed(1) }}h</span>
                 <span :class="['tag', r.summary.total_ktv >= targetKtV ? 'ok' : 'bad']">
                   {{ r.summary.total_ktv >= targetKtV ? '达标' : '未达标' }}
@@ -221,6 +261,50 @@ const curveChartCanvas = ref(null)
 const selectedRound = ref(0)
 
 const latestRound = computed(() => (rounds.value.length ? rounds.value[rounds.value.length - 1] : null))
+const scoreWeights = ref({
+  ktv: 55,
+  uf: 25,
+  glucose: 20,
+})
+const normalizedWeights = computed(() => {
+  const k = Number(scoreWeights.value.ktv || 0)
+  const u = Number(scoreWeights.value.uf || 0)
+  const g = Number(scoreWeights.value.glucose || 0)
+  const sum = Math.max(k + u + g, 1)
+  return {
+    ktv: k / sum,
+    uf: u / sum,
+    glucose: g / sum,
+  }
+})
+const resetScoreWeights = () => {
+  scoreWeights.value.ktv = 55
+  scoreWeights.value.uf = 25
+  scoreWeights.value.glucose = 20
+}
+const calcCompositeScore = (summary) => {
+  if (!summary) return 0
+  const ktv = Number(summary.total_ktv || 0)
+  const uf = Number(summary.total_uf || 0)
+  const glucose = Number(summary.total_glucose_absorbed || 0)
+
+  // Kt/V 越接近目标越好；达标后仍保留分差（避免“一刀切”）
+  const ktvScore = Math.max(0, 100 - Math.abs(ktv - Number(targetKtV.value || 1.7)) * 120)
+  // UF 目标区间粗设为 80~150（与当前模型量级匹配）
+  const ufCenter = 115
+  const ufScore = Math.max(0, 100 - Math.abs(uf - ufCenter) * 1.2)
+  // 葡萄糖吸收越低越好
+  const glucoseScore = Math.max(0, 100 - glucose * 0.8)
+
+  return (
+    ktvScore * normalizedWeights.value.ktv +
+    ufScore * normalizedWeights.value.uf +
+    glucoseScore * normalizedWeights.value.glucose
+  )
+}
+const baselineCompositeScore = computed(() => calcCompositeScore(baseline.value?.summary))
+const latestCompositeScore = computed(() => calcCompositeScore(latestRound.value?.summary))
+const scoreDelta = computed(() => latestCompositeScore.value - baselineCompositeScore.value)
 
 const phaseTemplate = ref([])
 
@@ -775,6 +859,85 @@ input {
 .v {
   color: #1f2340;
   font-weight: 800;
+}
+.score-panel {
+  margin-top: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+.score-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #1f2937;
+}
+.score-head strong {
+  font-size: 16px;
+  color: #4f46e5;
+}
+.score-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.score-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #60a5fa 0%, #4f46e5 100%);
+  transition: width 0.35s ease;
+}
+.score-sub {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #475569;
+}
+.delta {
+  margin-left: 6px;
+  font-weight: 700;
+}
+.delta.up {
+  color: #16a34a;
+}
+.delta.down {
+  color: #dc2626;
+}
+.weight-box {
+  margin-top: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+.weight-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1f2340;
+  margin-bottom: 8px;
+}
+.weight-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.weight-row input[type='range'] {
+  width: 100%;
+}
+.weight-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+.weight-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
 }
 .template-table {
   border: 1px solid rgba(0, 0, 0, 0.06);

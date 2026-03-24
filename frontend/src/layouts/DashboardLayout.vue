@@ -16,6 +16,9 @@
         <RouterLink class="nav-item" to="/app/optimizer-sim" active-class="active">
           优化算法模拟
         </RouterLink>
+        <RouterLink class="nav-item" to="/app/collaboration" active-class="active">
+          协作与记录
+        </RouterLink>
       </nav>
 
       <div class="sidebar-footer">

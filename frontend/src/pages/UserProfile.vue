@@ -16,6 +16,20 @@
           <input v-model.trim="profile.org" placeholder="例如：XX医院 肾内科" />
         </div>
         <div class="field">
+          <label>医院</label>
+          <select v-model.number="profile.hospitalId" @change="onHospitalChange">
+            <option :value="0">请选择医院</option>
+            <option v-for="h in hospitals" :key="h.id" :value="h.id">{{ h.name }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>医疗组</label>
+          <select v-model.number="profile.medicalGroupId">
+            <option :value="0">请选择医疗组</option>
+            <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+          </select>
+        </div>
+        <div class="field">
           <label>手机号</label>
           <input v-model.trim="profile.phone" placeholder="可选" />
         </div>
@@ -42,19 +56,21 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { showToast } from '../utils/toast'
 
 const KEY = 'pd_user_profile'
 const API_BASE = 'http://localhost:5000/api'
+const hospitals = ref([])
+const groups = ref([])
 
 const load = () => {
   try {
     const raw = localStorage.getItem(KEY)
-    const base = { name: '', org: '', phone: '', note: '', allowSharePatients: false }
+    const base = { name: '', org: '', phone: '', note: '', allowSharePatients: false, hospitalId: 0, medicalGroupId: 0 }
     return raw ? Object.assign(base, JSON.parse(raw)) : base
   } catch {
-    return { name: '', org: '', phone: '', note: '', allowSharePatients: false }
+    return { name: '', org: '', phone: '', note: '', allowSharePatients: false, hospitalId: 0, medicalGroupId: 0 }
   }
 }
 
@@ -62,6 +78,40 @@ const profile = reactive(load())
 
 const persistLocal = () => {
   localStorage.setItem(KEY, JSON.stringify(profile))
+}
+
+const authHeaders = () => {
+  const token = localStorage.getItem('pd_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+const loadHospitals = async () => {
+  try {
+    const resp = await fetch(`${API_BASE}/hospitals`, { headers: authHeaders() })
+    const data = await resp.json().catch(() => ({}))
+    hospitals.value = data.hospitals || []
+  } catch {
+    hospitals.value = []
+  }
+}
+
+const loadGroups = async (hospitalId) => {
+  if (!hospitalId) {
+    groups.value = []
+    return
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/medical-groups?hospital_id=${hospitalId}`, { headers: authHeaders() })
+    const data = await resp.json().catch(() => ({}))
+    groups.value = data.groups || []
+  } catch {
+    groups.value = []
+  }
+}
+
+const onHospitalChange = async () => {
+  profile.medicalGroupId = 0
+  await loadGroups(profile.hospitalId)
 }
 
 const save = async () => {
@@ -78,6 +128,8 @@ const save = async () => {
         },
         body: JSON.stringify({
           org: profile.org,
+          hospital_id: profile.hospitalId || null,
+          medical_group_id: profile.medicalGroupId || null,
           allow_share_patients: profile.allowSharePatients,
         }),
       }).catch(() => null)
@@ -97,6 +149,13 @@ const reset = () => {
   profile.note = next.note
   profile.allowSharePatients = !!next.allowSharePatients
 }
+
+onMounted(async () => {
+  await loadHospitals()
+  if (profile.hospitalId) {
+    await loadGroups(profile.hospitalId)
+  }
+})
 </script>
 
 <style scoped>
@@ -171,7 +230,18 @@ input {
   outline: none;
   background: white;
 }
+select {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  outline: none;
+  background: white;
+}
 input:focus {
+  border-color: rgba(102, 126, 234, 0.55);
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.14);
+}
+select:focus {
   border-color: rgba(102, 126, 234, 0.55);
   box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.14);
 }

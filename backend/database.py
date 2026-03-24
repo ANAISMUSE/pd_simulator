@@ -12,6 +12,9 @@ class User(db.Model):
     username = db.Column(db.String(80), nullable=False, unique=True, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     display_name = db.Column(db.String(120))
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'))
+    medical_group_id = db.Column(db.Integer, db.ForeignKey('medical_groups.id'))
+    role = db.Column(db.String(32), default='doctor')
     org = db.Column(db.String(120))  # 医院/科室/机构
     allow_share_patients = db.Column(db.Boolean, default=False)  # 是否同意与本机构医生共享患者
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -21,8 +24,52 @@ class User(db.Model):
             'id': self.id,
             'username': self.username,
             'display_name': self.display_name,
+            'hospital_id': self.hospital_id,
+            'medical_group_id': self.medical_group_id,
+            'role': self.role,
             'org': self.org,
             'allow_share_patients': bool(self.allow_share_patients),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Hospital(db.Model):
+    """医院"""
+    __tablename__ = 'hospitals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    code = db.Column(db.String(50), unique=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    groups = db.relationship('MedicalGroup', backref='hospital', lazy='dynamic')
+    doctors = db.relationship('User', backref='hospital', lazy='dynamic')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'code': self.code,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class MedicalGroup(db.Model):
+    """医疗组（隶属于医院）"""
+    __tablename__ = 'medical_groups'
+
+    id = db.Column(db.Integer, primary_key=True)
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    doctors = db.relationship('User', backref='medical_group', lazy='dynamic')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'hospital_id': self.hospital_id,
+            'name': self.name,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -124,6 +171,62 @@ class Patient(db.Model):
             },
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class DoctorAccessRequest(db.Model):
+    """
+    医生之间患者访问申请：
+    - requester_doctor_id 申请方
+    - owner_doctor_id 被申请方（名下患者归属医生）
+    """
+    __tablename__ = 'doctor_access_requests'
+
+    id = db.Column(db.Integer, primary_key=True)
+    requester_doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    owner_doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), index=True)
+    reason = db.Column(db.String(255))
+    status = db.Column(db.String(20), default='pending', index=True)  # pending/approved/rejected
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    decided_at = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'requester_doctor_id': self.requester_doctor_id,
+            'owner_doctor_id': self.owner_doctor_id,
+            'hospital_id': self.hospital_id,
+            'reason': self.reason,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'decided_at': self.decided_at.isoformat() if self.decided_at else None,
+        }
+
+
+class DoctorPatientAccessGrant(db.Model):
+    """已批准的患者访问授权"""
+    __tablename__ = 'doctor_patient_access_grants'
+
+    id = db.Column(db.Integer, primary_key=True)
+    grantee_doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    owner_doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    hospital_id = db.Column(db.Integer, db.ForeignKey('hospitals.id'), index=True)
+    granted_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime)
+    active = db.Column(db.Boolean, default=True, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'grantee_doctor_id': self.grantee_doctor_id,
+            'owner_doctor_id': self.owner_doctor_id,
+            'hospital_id': self.hospital_id,
+            'granted_by': self.granted_by,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'active': bool(self.active),
         }
 
 
@@ -233,6 +336,91 @@ class PatientBiochemistrySnapshot(db.Model):
         }
 
 
+class PatientCheckRecord(db.Model):
+    """检查记录（时间 + 项目），可用于生化与统计建模输入"""
+    __tablename__ = 'patient_check_records'
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False, index=True)
+    checked_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    project_name = db.Column(db.String(120), nullable=False)
+    result_value = db.Column(db.String(120))
+    unit = db.Column(db.String(40))
+    note = db.Column(db.String(255))
+
+    patient = db.relationship('Patient', backref='check_records')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'patient_id': self.patient_id,
+            'checked_at': self.checked_at.isoformat() if self.checked_at else None,
+            'project_name': self.project_name,
+            'result_value': self.result_value,
+            'unit': self.unit,
+            'note': self.note,
+        }
+
+
+class PatientRegimenUsage(db.Model):
+    """
+    患者实际使用方案记录：
+    - template_id 引用方案模板（可空）
+    - regimen_snapshot 保存当时实际执行方案
+    - can_promote_to_template / promoted_template_id 支持“改动后升级为新模板”
+    """
+    __tablename__ = 'patient_regimen_usages'
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False, index=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    template_id = db.Column(db.Integer, db.ForeignKey('regimen_templates.id'))
+    regimen_snapshot = db.Column(db.JSON, nullable=False, default=dict)
+    can_promote_to_template = db.Column(db.Boolean, default=True)
+    promoted_template_id = db.Column(db.Integer, db.ForeignKey('regimen_templates.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    patient = db.relationship('Patient', backref='regimen_usages')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'patient_id': self.patient_id,
+            'doctor_id': self.doctor_id,
+            'template_id': self.template_id,
+            'regimen_snapshot': self.regimen_snapshot,
+            'can_promote_to_template': bool(self.can_promote_to_template),
+            'promoted_template_id': self.promoted_template_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class StatisticalModelRun(db.Model):
+    """统计模型运行记录（用于“利用统计模型”概念落表）"""
+    __tablename__ = 'statistical_model_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), index=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    model_name = db.Column(db.String(120), nullable=False)
+    model_version = db.Column(db.String(50))
+    input_payload = db.Column(db.JSON, default=dict)
+    output_payload = db.Column(db.JSON, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'patient_id': self.patient_id,
+            'doctor_id': self.doctor_id,
+            'model_name': self.model_name,
+            'model_version': self.model_version,
+            'input_payload': self.input_payload,
+            'output_payload': self.output_payload,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class RegimenAuditLog(db.Model):
     """方案操作审计记录"""
     __tablename__ = 'regimen_audit_logs'
@@ -291,6 +479,12 @@ def apply_schema_migrations(app):
             alterations.append("ALTER TABLE users ADD COLUMN org VARCHAR(120)")
         if not _column_exists(inspector, 'users', 'allow_share_patients'):
             alterations.append("ALTER TABLE users ADD COLUMN allow_share_patients BOOLEAN DEFAULT 0")
+        if not _column_exists(inspector, 'users', 'hospital_id'):
+            alterations.append("ALTER TABLE users ADD COLUMN hospital_id INTEGER REFERENCES hospitals(id)")
+        if not _column_exists(inspector, 'users', 'medical_group_id'):
+            alterations.append("ALTER TABLE users ADD COLUMN medical_group_id INTEGER REFERENCES medical_groups(id)")
+        if not _column_exists(inspector, 'users', 'role'):
+            alterations.append("ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'doctor'")
 
         # Patient 表新增归属医生、机构与共享标志
         if not _column_exists(inspector, 'patients', 'owner_user_id'):

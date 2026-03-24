@@ -7,6 +7,7 @@ import UserProfile from '../pages/UserProfile.vue'
 import Patient from '../pages/Patient.vue'
 import RegimenSim from '../pages/RegimenSim.vue'
 import OptimizerSim from '../pages/OptimizerSim.vue'
+import Collaboration from '../pages/Collaboration.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -23,6 +24,7 @@ const router = createRouter({
         { path: 'patient', component: Patient },
         { path: 'regimen-sim', component: RegimenSim },
         { path: 'optimizer-sim', component: OptimizerSim },
+        { path: 'collaboration', component: Collaboration },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/app/regimen-sim' },

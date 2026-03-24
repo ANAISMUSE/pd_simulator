@@ -15,6 +15,10 @@ import threading
 import time
 import csv
 import io
+from datetime import datetime
+from datetime import timedelta
+import pandas as pd
+from openpyxl import Workbook  # type: ignore
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
@@ -24,17 +28,24 @@ if BACKEND_ROOT not in sys.path:
 from database import (
     db,
     User,
+    Hospital,
+    MedicalGroup,
     Patient,
     RegimenTemplate,
     SimulationHistory,
     PatientBiochemistrySnapshot,
+    PatientCheckRecord,
+    PatientRegimenUsage,
+    StatisticalModelRun,
+    DoctorAccessRequest,
+    DoctorPatientAccessGrant,
     RegimenAuditLog,
     apply_schema_migrations,
 )
 from optimizer.genetic import GeneticOptimizer
 from optimizer.objectives import OptimizationObjectives
 from models.parameters import TransportType
-from sqlalchemy import or_  # type: ignore
+from sqlalchemy import or_, and_  # type: ignore
 
 app = Flask(__name__)
 CORS(app)
@@ -99,12 +110,24 @@ def _patient_visibility_filter(user: User):
     - 同机构、已标记共享的患者：owner_org == user.org AND is_shared == True
     """
     base = (Patient.owner_user_id == user.id)
+    grant_scope = and_(
+        DoctorPatientAccessGrant.grantee_doctor_id == user.id,
+        DoctorPatientAccessGrant.active.is_(True),
+        or_(
+            DoctorPatientAccessGrant.expires_at.is_(None),
+            DoctorPatientAccessGrant.expires_at > datetime.utcnow(),
+        ),
+    )
+    owner_granted = Patient.owner_user_id.in_(
+        db.session.query(DoctorPatientAccessGrant.owner_doctor_id).filter(grant_scope)
+    )
+    merged_scope = or_(base, owner_granted)
     if user.org:
         # 仅共享标记为 True 的患者对同机构开放；
         # 对于历史数据，owner_org 为空但 is_shared=True 的，也允许同机构医生看到。
         shared_scope = or_(Patient.owner_org == user.org, Patient.owner_org.is_(None))
-        return or_(base, Patient.is_shared.is_(True) & shared_scope)
-    return base
+        return or_(merged_scope, Patient.is_shared.is_(True) & shared_scope)
+    return merged_scope
 
 # ==================== 异常输出（打印 Traceback）====================
 
@@ -190,7 +213,8 @@ def auth_me():
 def update_me_settings():
     """
     更新当前用户的一些设置：
-    - org: 所在医院/科室
+    - org: 所在医院/科室（兼容旧字段）
+    - hospital_id / medical_group_id: 新 ER 结构
     - allow_share_patients: 是否允许自己的患者对同机构医生可见
     """
     user: User = request.current_user  # type: ignore[attr-defined]
@@ -199,10 +223,222 @@ def update_me_settings():
         if 'org' in payload:
             org = (payload.get('org') or '').strip() or None
             user.org = org
+        if 'hospital_id' in payload:
+            hospital_id = payload.get('hospital_id')
+            user.hospital_id = int(hospital_id) if hospital_id else None
+        if 'medical_group_id' in payload:
+            group_id = payload.get('medical_group_id')
+            user.medical_group_id = int(group_id) if group_id else None
         if 'allow_share_patients' in payload:
             user.allow_share_patients = bool(payload.get('allow_share_patients'))
         db.session.commit()
         return jsonify({'success': True, 'user': user.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+# ==================== 医院/医疗组/医生访问申请 API ====================
+
+@app.route('/api/hospitals', methods=['GET'])
+@auth_required
+def get_hospitals():
+    hospitals = Hospital.query.order_by(Hospital.name.asc()).all()
+    return jsonify({'success': True, 'hospitals': [h.to_dict() for h in hospitals]})
+
+
+@app.route('/api/hospitals', methods=['POST'])
+@auth_required
+def create_hospital():
+    try:
+        data = request.get_json(silent=True) or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'success': False, 'error': 'name required'}), 400
+        item = Hospital(name=name, code=(data.get('code') or '').strip() or None)
+        db.session.add(item)
+        db.session.commit()
+        return jsonify({'success': True, 'hospital': item.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/medical-groups', methods=['GET'])
+@auth_required
+def get_medical_groups():
+    hospital_id = request.args.get('hospital_id', type=int)
+    q = MedicalGroup.query
+    if hospital_id:
+        q = q.filter(MedicalGroup.hospital_id == hospital_id)
+    rows = q.order_by(MedicalGroup.id.desc()).all()
+    return jsonify({'success': True, 'groups': [g.to_dict() for g in rows]})
+
+
+@app.route('/api/medical-groups', methods=['POST'])
+@auth_required
+def create_medical_group():
+    try:
+        data = request.get_json(silent=True) or {}
+        hospital_id = data.get('hospital_id')
+        name = (data.get('name') or '').strip()
+        if not hospital_id or not name:
+            return jsonify({'success': False, 'error': 'hospital_id/name required'}), 400
+        group = MedicalGroup(hospital_id=int(hospital_id), name=name)
+        db.session.add(group)
+        db.session.commit()
+        return jsonify({'success': True, 'group': group.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/doctors', methods=['GET'])
+@auth_required
+def list_doctors():
+    """医生列表（默认同院）"""
+    user: User = request.current_user  # type: ignore[attr-defined]
+    hospital_id = request.args.get('hospital_id', type=int)
+    medical_group_id = request.args.get('medical_group_id', type=int)
+    q = User.query
+    if hospital_id:
+        q = q.filter(User.hospital_id == hospital_id)
+    elif user.hospital_id:
+        q = q.filter(User.hospital_id == user.hospital_id)
+    if medical_group_id:
+        q = q.filter(User.medical_group_id == medical_group_id)
+    rows = q.order_by(User.id.desc()).all()
+    return jsonify({'success': True, 'doctors': [r.to_dict() for r in rows]})
+
+
+@app.route('/api/access-requests', methods=['POST'])
+@auth_required
+def create_access_request():
+    """申请查看其他医生名下患者"""
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        data = request.get_json(silent=True) or {}
+        owner_doctor_id = int(data.get('owner_doctor_id') or 0)
+        if not owner_doctor_id or owner_doctor_id == user.id:
+            return jsonify({'success': False, 'error': 'invalid owner_doctor_id'}), 400
+        owner = User.query.get(owner_doctor_id)
+        if not owner:
+            return jsonify({'success': False, 'error': 'owner doctor not found'}), 404
+
+        # 限制同院申请（可按需放开）
+        if user.hospital_id and owner.hospital_id and user.hospital_id != owner.hospital_id:
+            return jsonify({'success': False, 'error': 'cross-hospital request not allowed'}), 403
+
+        existing = DoctorAccessRequest.query.filter_by(
+            requester_doctor_id=user.id,
+            owner_doctor_id=owner_doctor_id,
+            status='pending',
+        ).first()
+        if existing:
+            return jsonify({'success': False, 'error': 'pending request already exists'}), 409
+
+        req = DoctorAccessRequest(
+            requester_doctor_id=user.id,
+            owner_doctor_id=owner_doctor_id,
+            hospital_id=user.hospital_id or owner.hospital_id,
+            reason=(data.get('reason') or '').strip() or None,
+            status='pending',
+        )
+        db.session.add(req)
+        db.session.commit()
+        return jsonify({'success': True, 'request': req.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/access-requests', methods=['GET'])
+@auth_required
+def list_access_requests():
+    user: User = request.current_user  # type: ignore[attr-defined]
+    mode = (request.args.get('mode') or 'received').strip().lower()  # received/sent/all
+    q = DoctorAccessRequest.query
+    if mode == 'sent':
+        q = q.filter(DoctorAccessRequest.requester_doctor_id == user.id)
+    elif mode == 'all':
+        q = q.filter(
+            or_(
+                DoctorAccessRequest.requester_doctor_id == user.id,
+                DoctorAccessRequest.owner_doctor_id == user.id,
+            )
+        )
+    else:
+        q = q.filter(DoctorAccessRequest.owner_doctor_id == user.id)
+    rows = q.order_by(DoctorAccessRequest.created_at.desc()).all()
+    return jsonify({'success': True, 'requests': [r.to_dict() for r in rows]})
+
+
+@app.route('/api/access-requests/<int:request_id>/decision', methods=['POST'])
+@auth_required
+def decide_access_request(request_id: int):
+    """审批申请：approve / reject"""
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        data = request.get_json(silent=True) or {}
+        action = (data.get('action') or '').strip().lower()
+        expires_days = int(data.get('expires_days') or 0)
+        if action not in ('approve', 'reject'):
+            return jsonify({'success': False, 'error': 'action must be approve/reject'}), 400
+        req = DoctorAccessRequest.query.get_or_404(request_id)
+        if req.owner_doctor_id != user.id:
+            return jsonify({'success': False, 'error': 'no permission'}), 403
+        if req.status != 'pending':
+            return jsonify({'success': False, 'error': 'request already decided'}), 409
+
+        req.status = 'approved' if action == 'approve' else 'rejected'
+        req.decided_at = datetime.utcnow()
+        grant_obj = None
+        if action == 'approve':
+            grant_obj = DoctorPatientAccessGrant(
+                grantee_doctor_id=req.requester_doctor_id,
+                owner_doctor_id=req.owner_doctor_id,
+                hospital_id=req.hospital_id,
+                granted_by=user.id,
+                expires_at=(datetime.utcnow() + timedelta(days=expires_days)) if expires_days > 0 else None,
+                active=True,
+            )
+            db.session.add(grant_obj)
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'request': req.to_dict(),
+            'grant': grant_obj.to_dict() if grant_obj else None
+        })
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/access-grants', methods=['GET'])
+@auth_required
+def list_access_grants():
+    user: User = request.current_user  # type: ignore[attr-defined]
+    q = DoctorPatientAccessGrant.query.filter(
+        or_(
+            DoctorPatientAccessGrant.grantee_doctor_id == user.id,
+            DoctorPatientAccessGrant.owner_doctor_id == user.id,
+        )
+    )
+    rows = q.order_by(DoctorPatientAccessGrant.created_at.desc()).all()
+    return jsonify({'success': True, 'grants': [g.to_dict() for g in rows]})
+
+
+@app.route('/api/access-grants/<int:grant_id>/revoke', methods=['POST'])
+@auth_required
+def revoke_access_grant(grant_id: int):
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        grant = DoctorPatientAccessGrant.query.get_or_404(grant_id)
+        if grant.owner_doctor_id != user.id:
+            return jsonify({'success': False, 'error': 'no permission'}), 403
+        grant.active = False
+        db.session.commit()
+        return jsonify({'success': True, 'grant': grant.to_dict()})
     except Exception as e:
         db.session.rollback()
         return _error_response(e, 500)
@@ -543,6 +779,147 @@ class ThreePoreSimulator:
                 'phase_duration': float(dwell_time)
             }
         }
+
+    def classify_transport_from_pet(self, pet: Dict[str, Any]) -> str:
+        """
+        根据 PET 粗略判断腹膜转运类型（示意规则）：
+        主要参考 4h D/P 肌酐（dialysate/plasma）。
+        """
+        d4_cr = float((pet.get('d4', {}) or {}).get('creatinine', 0) or 0)
+        p2_cr = float((pet.get('p2', {}) or {}).get('creatinine', 0) or 0)
+        ratio = (d4_cr / p2_cr) if p2_cr > 0 else 0.0
+        if ratio >= 0.82:
+            return 'high'
+        if ratio >= 0.66:
+            return 'high_average'
+        if ratio >= 0.50:
+            return 'low_average'
+        return 'low'
+
+    def estimate_residual_renal_metrics(self, renal: Dict[str, Any], plasma: Dict[str, Any]) -> Dict[str, float]:
+        """
+        估算残余肾功能贡献：
+        - 残肾 Kt/V（按日）
+        - 肌酐清除率（L/day）
+        """
+        urine_24h_ml = float(renal.get('urine_24h_ml', 0) or 0)
+        urine_urea = float(renal.get('urine_urea', 0) or 0)
+        urine_creatinine = float(renal.get('urine_creatinine', 0) or 0)
+        plasma_urea = float(plasma.get('urea', 0) or 0)
+        plasma_creatinine = float(plasma.get('creatinine', 0) or 0)
+        weight = float(plasma.get('weight', 65) or 65)
+
+        # 24h 尿量换算为 L/day
+        urine_24h_l = urine_24h_ml / 1000.0
+        # 粗略的“去除量比例”作为残肾 Kt/V 估计
+        # 防止除零与异常值
+        renal_ktv = 0.0
+        if plasma_urea > 0 and weight > 0:
+            renal_ktv = max(min((urine_urea / plasma_urea) * (urine_24h_l / (weight * 0.6)), 3.0), 0.0)
+
+        renal_crcl_l_day = 0.0
+        if plasma_creatinine > 0:
+            renal_crcl_l_day = max((urine_creatinine / plasma_creatinine) * urine_24h_l, 0.0)
+
+        return {
+            'renal_ktv': float(round(renal_ktv, 3)),
+            'renal_creatinine_clearance_l_day': float(round(renal_crcl_l_day, 3)),
+        }
+
+    def simulate_single_exchange(
+        self,
+        solution_type: str,
+        concentration_pct: float,
+        dwell_minutes: float,
+        fill_volume_l: float,
+        drain_minutes: float = 7.0,
+        patient: Optional[Dict[str, Any]] = None,
+        biomarkers: Optional[Dict[str, Any]] = None,
+        current_time: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        模拟单次腹透（一次留腹+引流）：
+        输出尿素清除、β2M 清除、超滤（小孔/超小孔分解）。
+        """
+        patient = patient or {}
+        biomarkers = biomarkers or {}
+        weight = float(self._safe_get(patient, 'weight', 65))
+        age = float(self._safe_get(patient, 'age', 45))
+        bun = float(self._safe_get(biomarkers, 'bun', 25.3))
+        beta2m = float(self._safe_get(biomarkers, 'beta2_microglobulin', 25))
+        creatinine = float(self._safe_get(biomarkers, 'creatinine', 884))
+
+        dwell_minutes = max(float(dwell_minutes or 0), 10.0)
+        fill_volume_l = max(float(fill_volume_l or 0), 0.5)
+        concentration_pct = max(float(concentration_pct or 0), 0.0)
+        drain_minutes = max(float(drain_minutes or 0), 1.0)
+
+        # 方案类型对渗透与中大分子通量的影响（示意）
+        stype = (solution_type or 'glucose').lower()
+        if 'ico' in stype:
+            osmotic_factor = 0.85
+            beta2_factor = 1.15
+            ultrasmall_ratio = 0.35
+        elif 'amino' in stype:
+            osmotic_factor = 0.65
+            beta2_factor = 1.05
+            ultrasmall_ratio = 0.25
+        else:
+            osmotic_factor = 1.0 + (concentration_pct - 1.5) * 0.08
+            beta2_factor = 1.0
+            ultrasmall_ratio = min(max(0.45 + concentration_pct * 0.05, 0.35), 0.75)
+
+        # 个体系数
+        patient_factor = 0.8 + (age / 100.0) * 0.2 + (weight / 100.0) * 0.2
+        creatinine_factor = max(0.7, min(1.3, 1.0 - (creatinine - 884) / 8840))
+        clearance_factor = patient_factor * creatinine_factor
+
+        t = np.linspace(0, dwell_minutes, max(int(dwell_minutes / 5) + 1, 3))
+        # 将分钟用于指数衰减，保证曲线平滑
+        uf_rate = (concentration_pct * 5.0 * 0.015 * np.exp(-0.01 * t) * osmotic_factor * patient_factor)
+        urea_clearance = (8.5 * (1 - np.exp(-0.008 * t)) * clearance_factor) * (bun / max(bun, 1e-6))
+        beta2_clearance = (2.8 * (1 - np.exp(-0.004 * t)) * clearance_factor * beta2_factor) * (beta2m / max(beta2m, 1e-6))
+        creatinine_clearance = (7.0 * (1 - np.exp(-0.006 * t)) * clearance_factor)
+
+        total_uf = float(np.trapz(uf_rate, t))
+        uf_ultrasmall = total_uf * ultrasmall_ratio
+        uf_small = total_uf - uf_ultrasmall
+        urea_removed = float(np.trapz(urea_clearance, t))
+        beta2_removed = float(np.trapz(beta2_clearance, t))
+        creatinine_removed = float(np.trapz(creatinine_clearance, t))
+
+        v_dist = max(weight * 0.6 * 1000.0, 1.0)
+        peritoneal_ktv = (float(np.mean(urea_clearance)) * dwell_minutes) / v_dist
+
+        time_points = [float(current_time + m) for m in t.tolist()]
+        volume_curve = [(fill_volume_l * 1000.0 + float(uf_rate[i]) * float(t[i])) / 1000.0 for i in range(len(t))]
+
+        return {
+            'inputs': {
+                'solution_type': solution_type,
+                'concentration_pct': concentration_pct,
+                'dwell_minutes': dwell_minutes,
+                'fill_volume_l': fill_volume_l,
+                'drain_minutes': drain_minutes,
+            },
+            'summary': {
+                'urea_clearance': round(urea_removed, 3),
+                'beta2m_clearance': round(beta2_removed, 3),
+                'creatinine_clearance': round(creatinine_removed, 3),
+                'uf_small_pore': round(uf_small, 3),
+                'uf_ultrasmall_pore': round(uf_ultrasmall, 3),
+                'uf_total': round(total_uf, 3),
+                'peritoneal_ktv': round(peritoneal_ktv, 4),
+            },
+            'time_series': {
+                'time_min': time_points,
+                'volume_l': volume_curve,
+                'urea_clearance_rate': [float(x) for x in urea_clearance.tolist()],
+                'beta2m_clearance_rate': [float(x) for x in beta2_clearance.tolist()],
+                'uf_rate': [float(x) for x in uf_rate.tolist()],
+            },
+            'duration_total_min': float(dwell_minutes + drain_minutes),
+        }
     
     def simulate_full_regimen(self, regimen: Optional[Dict], patient: Optional[Dict], 
                               biomarkers: Optional[Dict]) -> Dict:
@@ -870,6 +1247,145 @@ def create_patient_biochemistry(patient_id: int):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 400
+
+
+@app.route('/api/patients/<int:patient_id>/checks', methods=['GET'])
+@auth_required
+def list_patient_checks(patient_id: int):
+    user: User = request.current_user  # type: ignore[attr-defined]
+    patient = Patient.query.filter(
+        Patient.id == patient_id, _patient_visibility_filter(user)
+    ).first_or_404()
+    rows = (PatientCheckRecord.query
+            .filter_by(patient_id=patient.id)
+            .order_by(PatientCheckRecord.checked_at.desc())
+            .all())
+    return jsonify({'success': True, 'checks': [r.to_dict() for r in rows]})
+
+
+@app.route('/api/patients/<int:patient_id>/checks', methods=['POST'])
+@auth_required
+def create_patient_check(patient_id: int):
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first_or_404()
+        data = request.get_json(silent=True) or {}
+        item = PatientCheckRecord(
+            patient_id=patient.id,
+            checked_at=datetime.fromisoformat(data['checked_at']) if data.get('checked_at') else datetime.utcnow(),
+            project_name=(data.get('project_name') or '').strip() or '未命名检查',
+            result_value=(data.get('result_value') or '').strip() or None,
+            unit=(data.get('unit') or '').strip() or None,
+            note=(data.get('note') or '').strip() or None,
+        )
+        db.session.add(item)
+        db.session.commit()
+        return jsonify({'success': True, 'check': item.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/patients/<int:patient_id>/regimen-usages', methods=['GET'])
+@auth_required
+def list_patient_regimen_usages(patient_id: int):
+    user: User = request.current_user  # type: ignore[attr-defined]
+    patient = Patient.query.filter(
+        Patient.id == patient_id, _patient_visibility_filter(user)
+    ).first_or_404()
+    rows = (PatientRegimenUsage.query
+            .filter_by(patient_id=patient.id)
+            .order_by(PatientRegimenUsage.created_at.desc())
+            .all())
+    return jsonify({'success': True, 'usages': [r.to_dict() for r in rows]})
+
+
+@app.route('/api/patients/<int:patient_id>/regimen-usages', methods=['POST'])
+@auth_required
+def create_patient_regimen_usage(patient_id: int):
+    """
+    新增患者实际使用方案记录。
+    可选 promote_as_template=true 自动把快照写入新模板。
+    """
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first_or_404()
+        data = request.get_json(silent=True) or {}
+        snapshot = data.get('regimen_snapshot') or {}
+        template_id = data.get('template_id')
+        usage = PatientRegimenUsage(
+            patient_id=patient.id,
+            doctor_id=user.id,
+            template_id=int(template_id) if template_id else None,
+            regimen_snapshot=snapshot,
+            can_promote_to_template=bool(data.get('can_promote_to_template', True)),
+        )
+        db.session.add(usage)
+        db.session.flush()
+
+        created_template = None
+        if data.get('promote_as_template'):
+            name = (data.get('template_name') or f"{patient.name}-个体化方案-{usage.id}").strip()
+            created_template = RegimenTemplate(
+                name=name,
+                description=(data.get('template_description') or '由患者实际方案生成'),
+                category='custom',
+                phases=normalize_regimen_phases(snapshot.get('phases', [])),
+                created_by=user.username,
+                metadata_json={'source_usage_id': usage.id, 'patient_id': patient.id},
+                schema_version=2,
+            )
+            db.session.add(created_template)
+            db.session.flush()
+            usage.promoted_template_id = created_template.id
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'usage': usage.to_dict(),
+            'created_template': serialize_regimen_model(created_template) if created_template else None,
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/model-runs', methods=['POST'])
+@auth_required
+def create_statistical_model_run():
+    """统计模型运行记录落库"""
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        data = request.get_json(silent=True) or {}
+        run = StatisticalModelRun(
+            patient_id=data.get('patient_id'),
+            doctor_id=user.id,
+            model_name=(data.get('model_name') or '').strip() or 'unnamed-model',
+            model_version=(data.get('model_version') or '').strip() or None,
+            input_payload=data.get('input_payload') or {},
+            output_payload=data.get('output_payload') or {},
+        )
+        db.session.add(run)
+        db.session.commit()
+        return jsonify({'success': True, 'run': run.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/model-runs', methods=['GET'])
+@auth_required
+def list_statistical_model_runs():
+    user: User = request.current_user  # type: ignore[attr-defined]
+    patient_id = request.args.get('patient_id', type=int)
+    q = StatisticalModelRun.query.filter(StatisticalModelRun.doctor_id == user.id)
+    if patient_id:
+        q = q.filter(StatisticalModelRun.patient_id == patient_id)
+    rows = q.order_by(StatisticalModelRun.created_at.desc()).all()
+    return jsonify({'success': True, 'runs': [r.to_dict() for r in rows]})
 
 # ==================== 方案管理 API ====================
 
@@ -1339,6 +1855,189 @@ def compare_regimens():
             'error': str(e)
         }), 500
 
+
+@app.route('/api/modeling/individualized', methods=['POST'])
+def individualized_modeling():
+    """
+    三孔模型-个体化建模：
+    输入 PET、2h 血液、24h 尿液等，输出转运类型、残肾贡献、钠筛、腹腔残余液体量估计。
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        patient = data.get('patient', {}) or {}
+        pet = data.get('pet', {}) or {}
+        blood_2h = data.get('blood_2h', {}) or {}
+        urine_24h = data.get('urine_24h', {}) or {}
+
+        transport_type = simulator.classify_transport_from_pet(pet)
+        renal = simulator.estimate_residual_renal_metrics(
+            {
+                'urine_24h_ml': urine_24h.get('urine_volume_24h_ml', urine_24h.get('volume_ml', 0)),
+                'urine_urea': urine_24h.get('urine_urea', 0),
+                'urine_creatinine': urine_24h.get('urine_creatinine', 0),
+            },
+            {
+                'urea': blood_2h.get('urea', 0),
+                'creatinine': blood_2h.get('creatinine', 0),
+                'weight': patient.get('weight', 65),
+            },
+        )
+
+        # 1小时钠筛（简化估算）：2h 血钠与 0h/2h 透析液钠的偏移
+        d0_na = float((pet.get('d0', {}) or {}).get('sodium', blood_2h.get('sodium', 140)) or 140)
+        d2_na = float((pet.get('d2', {}) or {}).get('sodium', d0_na) or d0_na)
+        plasma_na = float(blood_2h.get('sodium', 140) or 140)
+        sodium_sieving_1h = max((plasma_na - ((d0_na + d2_na) / 2.0)) * 0.6, 0.0)
+
+        # 腹腔残余液体量（简化估算）
+        # 用 4h 葡萄糖下降幅度和尿量粗估 residual volume
+        d0_glu = float((pet.get('d0', {}) or {}).get('glucose', 126) or 126)
+        d4_glu = float((pet.get('d4', {}) or {}).get('glucose', d0_glu * 0.5) or (d0_glu * 0.5))
+        glucose_drop_ratio = max(min((d0_glu - d4_glu) / max(d0_glu, 1e-6), 1.0), 0.0)
+        urine_24h_ml = float(urine_24h.get('urine_volume_24h_ml', urine_24h.get('volume_ml', 0)) or 0)
+        residual_intraperitoneal_ml = max(100.0, 350.0 - glucose_drop_ratio * 180.0 + max(0.0, 800 - urine_24h_ml) * 0.03)
+
+        return jsonify({
+            'success': True,
+            'result': {
+                'transport_type': transport_type,
+                'renal_ktv': renal['renal_ktv'],
+                'renal_creatinine_clearance_l_day': renal['renal_creatinine_clearance_l_day'],
+                'sodium_sieving_1h': round(float(sodium_sieving_1h), 3),
+                'residual_intraperitoneal_volume_ml': round(float(residual_intraperitoneal_ml), 1),
+            },
+        })
+    except Exception as e:
+        return _error_response(e, 500)
+
+
+@app.route('/api/simulate/single-exchange', methods=['POST'])
+def simulate_single_exchange_api():
+    """
+    三孔模型-单次腹透模拟：
+    输入：液体类型、浓度、留腹时间、灌注量、引流时间
+    输出：尿素清除、β2M 清除、超滤（小孔/超小孔）
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        patient = data.get('patient', {}) or {}
+        biomarkers = data.get('biomarkers', {}) or {}
+        solution_type = data.get('solution_type', 'glucose')
+        concentration_pct = float(data.get('concentration_pct', data.get('concentration', 1.5)) or 1.5)
+        dwell_minutes = float(data.get('dwell_minutes', data.get('dwell_hours', 6) * 60) or 360)
+        fill_volume_l = float(data.get('fill_volume_l', data.get('fill_volume', 2.0)) or 2.0)
+        drain_minutes = float(data.get('drain_minutes', 7) or 7)
+
+        result = simulator.simulate_single_exchange(
+            solution_type=solution_type,
+            concentration_pct=concentration_pct,
+            dwell_minutes=dwell_minutes,
+            fill_volume_l=fill_volume_l,
+            drain_minutes=drain_minutes,
+            patient=patient,
+            biomarkers=biomarkers,
+            current_time=0.0,
+        )
+        return jsonify({'success': True, 'result': result})
+    except Exception as e:
+        return _error_response(e, 500)
+
+
+@app.route('/api/simulate/continuous-24h', methods=['POST'])
+def simulate_continuous_24h_api():
+    """
+    三孔模型-24小时连续透析模拟：
+    输入 cycles（每循环的液体类型/浓度/灌注量/留腹时间）和统一引流时间。
+    输出：总腹腔 Kt/V、总 Kt/V、肌酐清除、β2M 清除、总超滤（小孔/超小孔）。
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        patient = data.get('patient', {}) or {}
+        biomarkers = data.get('biomarkers', {}) or {}
+        cycles = data.get('cycles', []) or []
+        drain_minutes = float(data.get('drain_minutes', 7) or 7)
+        urine_24h = data.get('urine_24h', {}) or {}
+
+        if not cycles:
+            return jsonify({'success': False, 'error': 'cycles required'}), 400
+
+        total_peritoneal_ktv = 0.0
+        total_creatinine_clearance = 0.0
+        total_beta2m_clearance = 0.0
+        total_uf_small = 0.0
+        total_uf_ultrasmall = 0.0
+        current_time = 0.0
+        cycle_results = []
+        ts = {
+            'time_min': [],
+            'volume_l': [],
+            'urea_clearance_rate': [],
+            'beta2m_clearance_rate': [],
+            'uf_rate': [],
+        }
+
+        for idx, c in enumerate(cycles):
+            single = simulator.simulate_single_exchange(
+                solution_type=c.get('solution_type', 'glucose'),
+                concentration_pct=float(c.get('concentration_pct', c.get('concentration', 1.5)) or 1.5),
+                dwell_minutes=float(c.get('dwell_minutes', c.get('dwell_hours', 6) * 60) or 360),
+                fill_volume_l=float(c.get('fill_volume_l', c.get('fill_volume', 2.0)) or 2.0),
+                drain_minutes=drain_minutes,
+                patient=patient,
+                biomarkers=biomarkers,
+                current_time=current_time,
+            )
+            cycle_results.append({'cycle': idx + 1, **single})
+            s = single['summary']
+            total_peritoneal_ktv += float(s.get('peritoneal_ktv', 0))
+            total_creatinine_clearance += float(s.get('creatinine_clearance', 0))
+            total_beta2m_clearance += float(s.get('beta2m_clearance', 0))
+            total_uf_small += float(s.get('uf_small_pore', 0))
+            total_uf_ultrasmall += float(s.get('uf_ultrasmall_pore', 0))
+
+            tss = single.get('time_series', {})
+            ts['time_min'].extend(tss.get('time_min', []))
+            ts['volume_l'].extend(tss.get('volume_l', []))
+            ts['urea_clearance_rate'].extend(tss.get('urea_clearance_rate', []))
+            ts['beta2m_clearance_rate'].extend(tss.get('beta2m_clearance_rate', []))
+            ts['uf_rate'].extend(tss.get('uf_rate', []))
+            current_time += float(single.get('duration_total_min', 0))
+
+        renal = simulator.estimate_residual_renal_metrics(
+            {
+                'urine_24h_ml': urine_24h.get('urine_volume_24h_ml', urine_24h.get('volume_ml', 0)),
+                'urine_urea': urine_24h.get('urine_urea', 0),
+                'urine_creatinine': urine_24h.get('urine_creatinine', 0),
+            },
+            {
+                'urea': biomarkers.get('bun', 0),
+                'creatinine': biomarkers.get('creatinine', 0),
+                'weight': patient.get('weight', 65),
+            },
+        )
+
+        total_ktv = total_peritoneal_ktv + float(renal.get('renal_ktv', 0))
+
+        return jsonify({
+            'success': True,
+            'result': {
+                'total_peritoneal_ktv': round(total_peritoneal_ktv, 4),
+                'total_ktv': round(total_ktv, 4),
+                'creatinine_clearance': round(total_creatinine_clearance, 3),
+                'beta2m_clearance': round(total_beta2m_clearance, 3),
+                'total_uf_small_pore': round(total_uf_small, 3),
+                'total_uf_ultrasmall_pore': round(total_uf_ultrasmall, 3),
+                'total_uf': round(total_uf_small + total_uf_ultrasmall, 3),
+                'renal_ktv': renal['renal_ktv'],
+                'renal_creatinine_clearance_l_day': renal['renal_creatinine_clearance_l_day'],
+                'duration_total_min': round(current_time, 1),
+                'cycles': cycle_results,
+                'time_series': ts,
+            },
+        })
+    except Exception as e:
+        return _error_response(e, 500)
+
 @app.route('/api/optimize', methods=['POST'])
 def optimize_regimen():
     """优化透析方案"""
@@ -1474,6 +2173,306 @@ def import_patients_batch():
     except Exception as e:
         db.session.rollback()
         return _error_response(e, 500)
+
+
+def _to_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in ('1', 'true', 'yes', 'y', '是', '同意')
+
+
+def _to_int(value):
+    if value is None or str(value).strip() == '':
+        return None
+    try:
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _to_float(value):
+    if value is None or str(value).strip() == '':
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _pick(row: Dict[str, Any], *keys: str):
+    for key in keys:
+        if key in row and row[key] is not None and str(row[key]).strip() != '':
+            return row[key]
+    return None
+
+
+def _read_table_rows(upload_file) -> List[Dict[str, Any]]:
+    filename = (upload_file.filename or '').lower()
+    raw = upload_file.read()
+    if not raw:
+        return []
+    if filename.endswith('.xlsx') or filename.endswith('.xls'):
+        df = pd.read_excel(io.BytesIO(raw))
+    else:
+        df = pd.read_csv(io.BytesIO(raw))
+    rows = df.to_dict(orient='records')
+    cleaned = []
+    for row in rows:
+        item = {}
+        for k, v in row.items():
+            if pd.isna(v):  # type: ignore[arg-type]
+                item[str(k).strip()] = None
+            else:
+                item[str(k).strip()] = v
+        cleaned.append(item)
+    return cleaned
+
+
+def _parse_tabular_rows(entity: str, rows: List[Dict[str, Any]], current_user: User, dry_run: bool = False):
+    """
+    统一解析逻辑：
+    - dry_run=True: 只校验与统计，不写库
+    - dry_run=False: 解析并写库
+    """
+    created = 0
+    updated = 0
+    skipped = 0
+    errors: List[Dict[str, Any]] = []
+
+    for idx, row in enumerate(rows, start=2):
+        try:
+            if entity == 'patients':
+                name = _pick(row, 'name', '姓名')
+                if not name:
+                    skipped += 1
+                    continue
+                if dry_run:
+                    created += 1
+                    continue
+                patient = Patient(
+                    name=str(name).strip(),
+                    gender=str(_pick(row, 'gender', '性别') or '').strip() or None,
+                    age=_to_int(_pick(row, 'age', '年龄')),
+                    weight=_to_float(_pick(row, 'weight', '体重')),
+                    height=_to_float(_pick(row, 'height', '身高')),
+                    bsa=_to_float(_pick(row, 'bsa', '体表面积')),
+                    dialysis_vintage=_to_int(_pick(row, 'dialysis_vintage', '透析龄')),
+                    primary_disease=str(_pick(row, 'primary_disease', '原发病') or '').strip() or None,
+                    residual_kidney_function=str(_pick(row, 'residual_kidney_function', '残余肾功能') or '').strip() or None,
+                    peritoneal_transport=str(_pick(row, 'peritoneal_transport', '腹膜转运') or '').strip() or None,
+                    urine_volume=_to_float(_pick(row, 'urine_volume', '尿量')),
+                    blood_pressure_systolic=_to_float(_pick(row, 'blood_pressure_systolic', '收缩压')),
+                    blood_pressure_diastolic=_to_float(_pick(row, 'blood_pressure_diastolic', '舒张压')),
+                    owner_user_id=current_user.id,
+                    owner_org=current_user.org,
+                    is_shared=_to_bool(_pick(row, 'is_shared', '是否共享', '共享'), False),
+                )
+                db.session.add(patient)
+                created += 1
+            else:
+                username = _pick(row, 'username', '用户名')
+                if not username:
+                    skipped += 1
+                    continue
+                username_text = str(username).strip()
+                if not username_text:
+                    skipped += 1
+                    continue
+                existing = User.query.filter_by(username=username_text).first()
+                if dry_run:
+                    if existing:
+                        updated += 1
+                    else:
+                        created += 1
+                    continue
+                pwd = str(_pick(row, 'password', '密码') or '123456')
+                display_name = str(_pick(row, 'display_name', 'name', '姓名') or '').strip() or None
+                org = str(_pick(row, 'org', '单位', '科室') or '').strip() or None
+                hospital_id = _to_int(_pick(row, 'hospital_id', '医院ID'))
+                medical_group_id = _to_int(_pick(row, 'medical_group_id', '医疗组ID'))
+                allow_share_patients = _to_bool(_pick(row, 'allow_share_patients', '允许共享', '是否共享患者'), False)
+                role = str(_pick(row, 'role', '角色') or 'doctor').strip() or 'doctor'
+
+                if existing:
+                    existing.display_name = display_name or existing.display_name
+                    existing.org = org if org is not None else existing.org
+                    existing.hospital_id = hospital_id if hospital_id is not None else existing.hospital_id
+                    existing.medical_group_id = medical_group_id if medical_group_id is not None else existing.medical_group_id
+                    existing.allow_share_patients = allow_share_patients
+                    existing.role = role
+                    updated += 1
+                else:
+                    user = User(
+                        username=username_text,
+                        password_hash=generate_password_hash(pwd),
+                        display_name=display_name,
+                        org=org,
+                        hospital_id=hospital_id,
+                        medical_group_id=medical_group_id,
+                        allow_share_patients=allow_share_patients,
+                        role=role,
+                    )
+                    db.session.add(user)
+                    created += 1
+        except Exception as row_err:
+            skipped += 1
+            errors.append({'row': idx, 'error': str(row_err)})
+
+    return {
+        'created': created,
+        'updated': updated,
+        'skipped': skipped,
+        'errors': errors,
+    }
+
+
+@app.route('/api/import/tabular', methods=['POST'])
+@auth_required
+def import_tabular():
+    """
+    统一表格导入接口（CSV / Excel）：
+    - multipart/form-data，字段：file
+    - query 参数：entity=patients | doctors
+
+    patients 常用列（支持中英文别名）：
+    - name/姓名, gender/性别, age/年龄, weight/体重, height/身高, bsa/体表面积
+    - dialysis_vintage/透析龄, primary_disease/原发病, residual_kidney_function/残余肾功能
+    - peritoneal_transport/腹膜转运, urine_volume/尿量, blood_pressure_systolic/收缩压, blood_pressure_diastolic/舒张压
+    - is_shared/是否共享
+
+    doctors 常用列：
+    - username/用户名, password/密码(可选，默认123456), display_name/姓名
+    - org/单位, hospital_id/医院ID, medical_group_id/医疗组ID
+    - allow_share_patients/允许共享, role/角色
+    """
+    entity = (request.args.get('entity') or '').strip().lower()
+    file = request.files.get('file')
+    if entity not in ('patients', 'doctors'):
+        return jsonify({'success': False, 'error': 'entity must be patients or doctors'}), 400
+    if not file:
+        return jsonify({'success': False, 'error': 'missing file'}), 400
+
+    try:
+        current_user: User = request.current_user  # type: ignore[attr-defined]
+        rows = _read_table_rows(file)
+        parsed = _parse_tabular_rows(entity, rows, current_user, dry_run=False)
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'entity': entity,
+            'total_rows': len(rows),
+            'created': parsed['created'],
+            'updated': parsed['updated'],
+            'skipped': parsed['skipped'],
+            'errors': parsed['errors'][:50],
+        })
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
+@app.route('/api/import/tabular/validate', methods=['POST'])
+@auth_required
+def validate_tabular():
+    """
+    导入预校验（只检查不入库）：
+    - multipart/form-data: file
+    - query: entity=patients|doctors
+    """
+    entity = (request.args.get('entity') or '').strip().lower()
+    file = request.files.get('file')
+    if entity not in ('patients', 'doctors'):
+        return jsonify({'success': False, 'error': 'entity must be patients or doctors'}), 400
+    if not file:
+        return jsonify({'success': False, 'error': 'missing file'}), 400
+    try:
+        current_user: User = request.current_user  # type: ignore[attr-defined]
+        rows = _read_table_rows(file)
+        parsed = _parse_tabular_rows(entity, rows, current_user, dry_run=True)
+        return jsonify({
+            'success': True,
+            'entity': entity,
+            'total_rows': len(rows),
+            'would_create': parsed['created'],
+            'would_update': parsed['updated'],
+            'would_skip': parsed['skipped'],
+            'errors': parsed['errors'][:50],
+        })
+    except Exception as e:
+        return _error_response(e, 500)
+
+
+@app.route('/api/import/template', methods=['GET'])
+@auth_required
+def download_import_template():
+    """
+    下载导入模板：
+    - query: entity=patients|doctors
+    - query: format=xlsx|csv (默认 xlsx)
+    """
+    entity = (request.args.get('entity') or '').strip().lower()
+    fmt = (request.args.get('format') or 'xlsx').strip().lower()
+    if entity not in ('patients', 'doctors'):
+        return jsonify({'success': False, 'error': 'entity must be patients or doctors'}), 400
+    if fmt not in ('xlsx', 'csv'):
+        return jsonify({'success': False, 'error': 'format must be xlsx or csv'}), 400
+
+    if entity == 'patients':
+        columns = [
+            'name', 'gender', 'age', 'weight', 'height', 'bsa',
+            'dialysis_vintage', 'primary_disease', 'residual_kidney_function',
+            'peritoneal_transport', 'urine_volume', 'blood_pressure_systolic',
+            'blood_pressure_diastolic', 'is_shared'
+        ]
+        sample = [[
+            '张三', 'male', 52, 63.5, 168, 1.72,
+            24, 'diabetic_nephropathy', 'minimal', 'high_average',
+            600, 145, 88, True
+        ]]
+    else:
+        columns = [
+            'username', 'password', 'display_name', 'org',
+            'hospital_id', 'medical_group_id', 'allow_share_patients', 'role'
+        ]
+        sample = [[
+            'doctor_lee', '123456', '李医生', 'XX医院 肾内科',
+            1, 1, True, 'doctor'
+        ]]
+
+    df = pd.DataFrame(sample, columns=columns)
+
+    if fmt == 'csv':
+        csv_buf = io.StringIO()
+        df.to_csv(csv_buf, index=False)
+        mem = io.BytesIO(csv_buf.getvalue().encode('utf-8-sig'))
+        mem.seek(0)
+        return send_file(
+            mem,
+            as_attachment=True,
+            download_name=f'{entity}_import_template.csv',
+            mimetype='text/csv',
+        )
+
+    out = io.BytesIO()
+    wb = Workbook()
+    ws = wb.active
+    if ws is None:
+        raise RuntimeError('failed to create worksheet')
+    ws.title = 'template'
+    ws.append(columns)
+    for row in sample:
+        ws.append(row)
+    wb.save(out)
+    out.seek(0)
+    return send_file(
+        out,
+        as_attachment=True,
+        download_name=f'{entity}_import_template.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 def run_genetic_optimization(mode: str):

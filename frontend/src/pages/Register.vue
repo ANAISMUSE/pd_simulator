@@ -29,6 +29,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { showToast } from '../utils/toast'
 
 const router = useRouter()
 const username = ref('')
@@ -50,15 +51,16 @@ const doRegister = async () => {
     })
     const data = await resp.json().catch(() => ({}))
     if (!data.success) {
-      window.alert(data.error || '注册失败，请稍后重试')
+      showToast(data.error || '注册失败，请稍后重试', 'error')
       return
     }
     localStorage.setItem('pd_token', data.token)
     localStorage.setItem('pd_username', data.user?.username || username.value)
+    if (data.user?.id != null) localStorage.setItem('pd_user_id', String(data.user.id))
     router.push('/app/user')
   } catch (e) {
     console.error(e)
-    window.alert('无法连接后端服务，请确认后端已在 5000 端口启动')
+    showToast('无法连接后端服务，请确认后端已在 5000 端口启动', 'error')
   } finally {
     loading.value = false
   }

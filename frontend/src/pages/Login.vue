@@ -26,6 +26,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { showToast } from '../utils/toast'
 
 const router = useRouter()
 const username = ref('')
@@ -50,6 +51,7 @@ const doLogin = async () => {
     }
     localStorage.setItem('pd_token', data.token)
     localStorage.setItem('pd_username', data.user?.username || username.value)
+    if (data.user?.id != null) localStorage.setItem('pd_user_id', String(data.user.id))
     router.push('/app/regimen-sim')
   } catch (e) {
     console.error(e)
