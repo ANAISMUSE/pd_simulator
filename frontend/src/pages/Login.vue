@@ -45,7 +45,7 @@ const doLogin = async () => {
     })
     const data = await resp.json().catch(() => ({}))
     if (!data.success) {
-      window.alert(data.error || '登录失败，请检查用户名和密码')
+      showToast(data.error || '登录失败，请检查用户名和密码')
       return
     }
     localStorage.setItem('pd_token', data.token)
@@ -53,7 +53,7 @@ const doLogin = async () => {
     router.push('/app/regimen-sim')
   } catch (e) {
     console.error(e)
-    window.alert('无法连接后端服务，请确认后端已在 5000 端口启动')
+    showToast('无法连接后端服务，请确认后端已在 5000 端口启动') 
   } finally {
     loading.value = false
   }

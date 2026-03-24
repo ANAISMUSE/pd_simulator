@@ -195,6 +195,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { Chart, registerables } from 'chart.js'
+import { showToast } from '../utils/toast'
 
 Chart.register(...registerables)
 
@@ -253,12 +254,12 @@ const loadBaselineFromLastSim = () => {
   try {
     const raw = localStorage.getItem('pd_last_simulation')
     if (!raw) {
-      window.alert('没有找到最近一次模拟结果。请先去“方案模拟”跑一次模拟。')
+      showToast('没有找到最近一次模拟结果。请先去“方案模拟”跑一次模拟。')
       return
     }
     const data = JSON.parse(raw)
     if (!data?.summary) {
-      window.alert('最近一次模拟结果不完整，请重新模拟一次。')
+      showToast('最近一次模拟结果不完整，请重新模拟一次。')
       return
     }
     baseline.value = {
@@ -270,14 +271,14 @@ const loadBaselineFromLastSim = () => {
     renderCurveChart()
   } catch (e) {
     console.error(e)
-    window.alert('读取基线失败，请重新模拟一次。')
+    showToast('读取基线失败，请重新模拟一次。')
   }
 }
 
 const loadPatientPayload = () => {
   const raw = localStorage.getItem('pd_current_patient')
   if (!raw) {
-    window.alert('请先在“患者信息”页面填写并保存患者，再进行优化。')
+    showToast('请先在“患者信息”页面填写并保存患者，再进行优化。')
     return null
   }
   try {
@@ -285,7 +286,7 @@ const loadPatientPayload = () => {
     return { patient: data.patient, biomarkers: data.biomarkers }
   } catch (e) {
     console.error(e)
-    window.alert('本地患者信息损坏，请重新在“患者信息”页保存。')
+    showToast('本地患者信息损坏，请重新在“患者信息”页保存。')
     return null
   }
 }

@@ -8,7 +8,7 @@
 
       <nav class="nav">
         <RouterLink class="nav-item" to="/app/patient" active-class="active">
-          患者信息
+          患者管理
         </RouterLink>
         <RouterLink class="nav-item" to="/app/regimen-sim" active-class="active">
           方案模拟

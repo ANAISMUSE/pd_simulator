@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="header">
-      <div class="title">患者信息</div>
+      <div class="title">患者管理</div>
       <div class="subtitle">管理患者基本信息、生化指标，并与后端患者库同步</div>
     </div>
 

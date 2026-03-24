@@ -8,9 +8,9 @@
     <div class="main">
       <div class="left">
         <div class="section-card">
-          <h2>👤 选择患者（与“患者信息”模块区分）</h2>
+          <h2>👤 选择患者</h2>
           <div class="hint">
-            这里仅用于“方案模拟”选择模拟对象；患者的详细编辑请在左侧菜单的“患者信息”中完成。
+            这里仅用于“方案模拟”选择模拟对象；患者的详细编辑请在左侧菜单的“患者管理”中完成。
           </div>
           <div class="patient-row">
             <select v-model="selectedPatientId" @change="loadPatientData" class="patient-select">
@@ -76,13 +76,22 @@
                     <span class="created-time">{{ formatDate(regimen.createdAt) }}</span>
                   </div>
                 </div>
-                <button
-                  @click.stop="deleteCustomRegimen(regimen.id)"
-                  class="delete-btn"
-                  title="删除"
-                >
-                  🗑️
-                </button>
+                <div class="regimen-actions">
+                  <button
+                    @click.stop="editCustomRegimen(regimen)"
+                    class="edit-btn"
+                    title="编辑"
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    @click.stop="deleteCustomRegimen(regimen.id)"
+                    class="delete-btn"
+                    title="删除"
+                  >
+                    🗑️
+                  </button>
+                </div>
               </div>
             </div>
             <div class="empty-custom" v-else>暂无自定义方案</div>
@@ -163,13 +172,63 @@
             </div>
 
             <div v-if="simulationResult" class="chart-container" role="img" aria-label="模拟指标随时间变化图">
-              <canvas ref="chartCanvas" width="800" height="400"></canvas>
+              <div ref="mainChartEl" class="chart-inner"></div>
             </div>
 
             <div v-if="comparisonResults.length" class="result-card">
               <h3>📊 方案对比</h3>
               <div class="comparison-chart-container">
-                <canvas ref="comparisonChartCanvas"></canvas>
+                <div ref="compareChartEl" class="chart-inner"></div>
+              </div>
+
+              <div class="comparison-table-wrapper">
+                <table class="comparison-table">
+                  <thead>
+                    <tr>
+                      <th>方案名称</th>
+                      <th>总 Kt/V</th>
+                      <th>总超滤量 (L)</th>
+                      <th>葡萄糖吸收 (g)</th>
+                      <th>总时长 (小时)</th>
+                      <th>预测肌酐 (μmol/L)</th>
+                      <th>预测尿素氮 (mmol/L)</th>
+                      <th>预测血钾 (mmol/L)</th>
+                      <th>充分性评估</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in comparisonResults" :key="row.regimen_id">
+                      <td>{{ row.regimen_name }}</td>
+                      <td>{{ row.summary.total_ktv?.toFixed(2) ?? '-' }}</td>
+                      <td>{{ row.summary.total_uf?.toFixed(1) ?? '-' }}</td>
+                      <td>{{ row.summary.total_glucose_absorbed?.toFixed(0) ?? '-' }}</td>
+                      <td>
+                        {{
+                          row.summary.total_duration != null
+                            ? (Number(row.summary.total_duration) / 60).toFixed(1)
+                            : '-'
+                        }}
+                      </td>
+                      <td>{{ row.summary.predicted_creatinine ?? '-' }}</td>
+                      <td>{{ row.summary.predicted_bun ?? '-' }}</td>
+                      <td>{{ row.summary.predicted_potassium ?? '-' }}</td>
+                      <td>
+                        <span
+                          :class="[
+                            'adequacy-tag',
+                            row.summary.adequacy_status === 'adequate' ? 'ok' : 'not-ok',
+                          ]"
+                        >
+                          {{
+                            row.summary.adequacy_status === 'adequate'
+                              ? '达标'
+                              : '不达标'
+                          }}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </template>
@@ -248,11 +307,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
-import { Chart, registerables } from 'chart.js'
+import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
+import * as echarts from 'echarts'
 import { showToast } from '../utils/toast'
-
-Chart.register(...registerables)
 
 const API_BASE = 'http://localhost:5000/api'
 
@@ -265,8 +322,10 @@ const simulationResult = ref(null)
 const comparisonResults = ref([])
 const showCustomDialog = ref(false)
 
-const chartCanvas = ref(null)
-const comparisonChartCanvas = ref(null)
+const mainChartEl = ref(null)
+const compareChartEl = ref(null)
+let mainChart = null
+let compareChart = null
 
 // 患者选择（仅用于本页模拟）
 const patientsList = ref([])
@@ -278,6 +337,7 @@ const customRegimen = ref({
   name: '',
   phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
 })
+const editingRegimenId = ref(null)
 
 const loadPatientPayload = () => {
   // 严格要求：必须在本页上方明确选择一个患者
@@ -447,21 +507,57 @@ const saveCustomRegimen = () => {
     showToast('请至少添加一个透析阶段', 'info')
     return
   }
-  const newRegimen = {
-    id: Date.now().toString(),
-    name: customRegimen.value.name,
-    phases: customRegimen.value.phases,
-    createdAt: new Date().toISOString(),
+  const now = new Date().toISOString()
+  if (editingRegimenId.value) {
+    // 编辑已有方案
+    const idx = customRegimens.value.findIndex((r) => r.id === editingRegimenId.value)
+    if (idx !== -1) {
+      customRegimens.value[idx] = {
+        ...customRegimens.value[idx],
+        name: customRegimen.value.name,
+        phases: customRegimen.value.phases,
+        updatedAt: now,
+      }
+    }
+  } else {
+    // 新建方案
+    const newRegimen = {
+      id: Date.now().toString(),
+      name: customRegimen.value.name,
+      phases: customRegimen.value.phases,
+      createdAt: now,
+    }
+    customRegimens.value.push(newRegimen)
   }
-  customRegimens.value.push(newRegimen)
   persistCustomRegimens()
-  selectedPresets.value = [`custom_${newRegimen.id}`]
+  // 默认选中当前方案
+  if (editingRegimenId.value) {
+    selectedPresets.value = [`custom_${editingRegimenId.value}`]
+  } else {
+    const last = customRegimens.value[customRegimens.value.length - 1]
+    if (last) selectedPresets.value = [`custom_${last.id}`]
+  }
   showCustomDialog.value = false
   showToast(`自定义方案 "${newRegimen.name}" 已保存`, 'success')
   customRegimen.value = {
     name: '',
     phases: [{ phase_name: '第1次', duration: 6, glucose_conc: 1.5, fill_volume: 2.0 }],
   }
+  editingRegimenId.value = null
+}
+
+const editCustomRegimen = (regimen) => {
+  editingRegimenId.value = regimen.id
+  customRegimen.value = {
+    name: regimen.name,
+    phases: regimen.phases.map((p) => ({
+      phase_name: p.phase_name,
+      duration: p.duration,
+      glucose_conc: p.glucose_conc,
+      fill_volume: p.fill_volume,
+    })),
+  }
+  showCustomDialog.value = true
 }
 
 const deleteCustomRegimen = (id) => {
@@ -546,14 +642,9 @@ const runSimulation = async () => {
       } catch (e) {
         console.error('保存最近一次模拟结果失败', e)
       }
-      // 等 DOM 更新且 canvas ref 可用后再绘图（v-if 下 ref 可能晚一帧）
       await nextTick()
       await nextTick()
-      if (!chartCanvas.value) {
-        setTimeout(() => renderChart(), 50)
-      } else {
-        renderChart()
-      }
+      setTimeout(() => renderMainChart(), 30)
     } else {
       showToast('模拟失败: ' + data.error, 'error')
     }
@@ -621,122 +712,168 @@ const compareRegimens = async () => {
   }
 }
 
-const renderChart = () => {
-  if (!chartCanvas.value || !simulationResult.value) return
-  const ctx = chartCanvas.value.getContext('2d')
-  if (chartCanvas.value.chart) chartCanvas.value.chart.destroy()
+const renderMainChart = () => {
+  if (!mainChartEl.value || !simulationResult.value) return
 
   const ts = simulationResult.value.time_series || {}
   const time = ts.time || []
-  if (!time.length) {
-    // 没有时间序列数据，直接不画动画，避免空白
-    return
-  }
-  const timeLabels = time.map((t) => t.toFixed(1))
+  if (!time.length) return
 
-  // 后端 volume 为 mL，图表显示 L
+  const allLabels = time.map((t) => Number(t).toFixed(0))
   const volumeL = (ts.volume || []).map((v) => (typeof v === 'number' ? v / 1000 : v))
-  const creatinineClearance = ts.creatinine_clearance || []
-  const ureaClearance = ts.urea_clearance || []
+  const crea = ts.creatinine_clearance || []
+  const urea = ts.urea_clearance || []
 
-  chartCanvas.value.chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: timeLabels,
-      datasets: [
-        {
-          label: '腹腔液体积 (L)',
-          data: volumeL,
-          borderColor: 'rgb(75, 192, 192)',
-          backgroundColor: 'rgba(75, 192, 192, 0.2)',
-          yAxisID: 'y',
-        },
-        {
-          label: '肌酐清除率 (μmol/min)',
-          data: creatinineClearance,
-          borderColor: 'rgb(255, 99, 132)',
-          backgroundColor: 'rgba(255, 99, 132, 0.2)',
-          yAxisID: 'y1',
-        },
-        {
-          label: '尿素清除率 (μmol/min)',
-          data: ureaClearance,
-          borderColor: 'rgb(255, 159, 64)',
-          backgroundColor: 'rgba(255, 159, 64, 0.2)',
-          yAxisID: 'y1',
-        },
-      ],
+  if (!mainChart) {
+    mainChart = echarts.init(mainChartEl.value)
+  }
+
+  let reveal = 1
+  const total = allLabels.length
+  const step = Math.max(1, Math.floor(total / 200))
+
+  const buildOption = (count) => ({
+    backgroundColor: '#ffffff',
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 60, top: 35, bottom: 40 },
+    xAxis: {
+      type: 'category',
+      data: allLabels.slice(0, count),
+      name: '时间 (分钟)',
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: '#64748b' } },
+      axisLabel: { color: '#64748b' },
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      animation: true,
-      scales: {
-        x: { title: { display: true, text: '时间 (分钟)' } },
-        y: {
-          type: 'linear',
-          position: 'left',
-          title: { display: true, text: '液体积 (L)' },
-        },
-        y1: {
-          type: 'linear',
-          position: 'right',
-          title: { display: true, text: '溶质清除率 (μmol/min)' },
-          grid: { drawOnChartArea: false },
-        },
+    yAxis: [
+      {
+        type: 'value',
+        name: '液体积 (L)',
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
       },
-    },
+      {
+        type: 'value',
+        name: '清除率 (μmol/min)',
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      {
+        name: '腹腔液体积 (L)',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2, color: '#4f46e5' },
+        areaStyle: { color: '#e0e7ff' },
+        data: volumeL.slice(0, count),
+      },
+      {
+        name: '肌酐清除率',
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2, color: '#06b6d4' },
+        data: crea.slice(0, count),
+      },
+      {
+        name: '尿素清除率',
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 2, color: '#f97316' },
+        data: urea.slice(0, count),
+      },
+    ],
   })
+
+  mainChart.setOption(buildOption(reveal), true)
+
+  const timer = setInterval(() => {
+    if (!mainChart) {
+      clearInterval(timer)
+      return
+    }
+    reveal += step
+    if (reveal >= total) {
+      reveal = total
+      clearInterval(timer)
+    }
+    mainChart.setOption(buildOption(reveal), false)
+  }, 40)
 }
 
 const renderComparisonChart = () => {
-  if (!comparisonChartCanvas.value || !comparisonResults.value.length) return
-  const ctx = comparisonChartCanvas.value.getContext('2d')
-  if (comparisonChartCanvas.value.chart) comparisonChartCanvas.value.chart.destroy()
+  if (!compareChartEl.value || !comparisonResults.value.length) return
 
   const labels = comparisonResults.value.map((r) => r.regimen_name)
   const ktvData = comparisonResults.value.map((r) => r.summary.total_ktv)
   const ufData = comparisonResults.value.map((r) => r.summary.total_uf)
   const glucoseData = comparisonResults.value.map((r) => r.summary.total_glucose_absorbed)
 
-  comparisonChartCanvas.value.chart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
+  if (!compareChart) {
+    compareChart = echarts.init(compareChartEl.value)
+  }
+
+  compareChart.setOption(
+    {
+      backgroundColor: '#ffffff',
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['Kt/V', '超滤量 (L)', '葡萄糖吸收 (g)'], top: 8 },
+      grid: { left: 50, right: 40, top: 40, bottom: 40 },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { lineStyle: { color: '#64748b' } },
+        axisLabel: { color: '#64748b' },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
+      },
+      series: [
         {
-          label: 'Kt/V',
+          name: 'Kt/V',
+          type: 'bar',
           data: ktvData,
-          backgroundColor: 'rgba(54, 162, 235, 0.5)',
-          borderColor: 'rgb(54, 162, 235)',
-          borderWidth: 1,
+          itemStyle: { color: '#4f46e5' },
         },
         {
-          label: '超滤量 (L)',
+          name: '超滤量 (L)',
+          type: 'bar',
           data: ufData,
-          backgroundColor: 'rgba(75, 192, 192, 0.5)',
-          borderColor: 'rgb(75, 192, 192)',
-          borderWidth: 1,
+          itemStyle: { color: '#0ea5e9' },
         },
         {
-          label: '葡萄糖吸收 (g) / 10',
-          data: glucoseData.map((g) => g / 10),
-          backgroundColor: 'rgba(255, 159, 64, 0.5)',
-          borderColor: 'rgb(255, 159, 64)',
-          borderWidth: 1,
+          name: '葡萄糖吸收 (g)',
+          type: 'line',
+          data: glucoseData,
+          smooth: true,
+          lineStyle: { width: 2, color: '#f97316' },
+          showSymbol: false,
         },
       ],
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { beginAtZero: true },
-      },
-    },
-  })
+    true,
+  )
 }
+
+onBeforeUnmount(() => {
+  if (mainChart) {
+    mainChart.dispose()
+    mainChart = null
+  }
+  if (compareChart) {
+    compareChart.dispose()
+    compareChart = null
+  }
+})
 </script>
 
 <style scoped>
@@ -886,6 +1023,17 @@ const renderComparisonChart = () => {
   justify-content: space-between;
   cursor: pointer;
 }
+.regimen-actions {
+  display: flex;
+  gap: 6px;
+}
+.edit-btn {
+  border: 0;
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+}
 .custom-regimen-item.active {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-color: #667eea;
@@ -970,26 +1118,26 @@ const renderComparisonChart = () => {
 }
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: 16px;
 }
 .metric-card {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 14px;
-  border-radius: 10px;
+  padding: 10px 8px;
+  border-radius: 8px;
   color: white;
   text-align: center;
 }
 .metric-icon {
-  font-size: 26px;
+  font-size: 20px;
 }
 .metric-value {
-  font-size: 22px;
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 700;
 }
 .metric-label {
-  font-size: 12px;
+  font-size: 11px;
   opacity: 0.9;
 }
 .chart-container {
@@ -998,7 +1146,7 @@ const renderComparisonChart = () => {
   position: relative;
   width: 100%;
 }
-.chart-container canvas {
+.chart-inner {
   display: block;
   width: 100% !important;
   height: 100% !important;
@@ -1007,6 +1155,43 @@ const renderComparisonChart = () => {
 .comparison-chart-container {
   min-height: 360px;
   height: 360px;
+}
+.comparison-table-wrapper {
+  margin-top: 14px;
+  overflow-x: auto;
+}
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.comparison-table thead {
+  background: #f8fafc;
+}
+.comparison-table th,
+.comparison-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: center;
+  white-space: nowrap;
+}
+.comparison-table th {
+  font-weight: 700;
+  color: #1f2937;
+}
+.adequacy-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.adequacy-tag.ok {
+  background: #dcfce7;
+  color: #15803d;
+}
+.adequacy-tag.not-ok {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 .empty-state {
   text-align: center;
