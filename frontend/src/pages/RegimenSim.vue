@@ -238,42 +238,12 @@
 
     <div class="section-card research-card">
       <h2>🧪 三孔模型研究</h2>
+      <p class="research-tip">
+        个体化建模（PET、残肾估计等）已移至<strong>患者管理</strong>页。请在该页完成建模并「保存建模到患者」后，在此选择同一患者即可自动使用其转运类型与 24h 尿参数参与 24h 连续模拟。
+      </p>
       <div class="research-grid">
         <div class="research-block">
-          <h3>1) 个体化建模</h3>
-          <div class="mini-grid">
-            <input v-model.number="modelingInput.pet.d0.creatinine" type="number" placeholder="0h透析液肌酐" />
-            <input v-model.number="modelingInput.pet.d0.glucose" type="number" placeholder="0h透析液葡萄糖" />
-            <input v-model.number="modelingInput.pet.d0.urea" type="number" placeholder="0h透析液尿素" />
-            <input v-model.number="modelingInput.pet.d2.creatinine" type="number" placeholder="2h透析液肌酐" />
-            <input v-model.number="modelingInput.pet.d2.glucose" type="number" placeholder="2h透析液葡萄糖" />
-            <input v-model.number="modelingInput.pet.d2.urea" type="number" placeholder="2h透析液尿素" />
-            <input v-model.number="modelingInput.pet.d4.creatinine" type="number" placeholder="4h透析液肌酐" />
-            <input v-model.number="modelingInput.pet.d4.glucose" type="number" placeholder="4h透析液葡萄糖" />
-            <input v-model.number="modelingInput.pet.d4.urea" type="number" placeholder="4h透析液尿素" />
-            <input v-model.number="modelingInput.blood_2h.creatinine" type="number" placeholder="2h血肌酐" />
-            <input v-model.number="modelingInput.blood_2h.urea" type="number" placeholder="2h血尿素" />
-            <input v-model.number="modelingInput.blood_2h.glucose" type="number" placeholder="2h血葡萄糖" />
-            <input v-model.number="modelingInput.blood_2h.sodium" type="number" placeholder="2h血钠" />
-            <input v-model.number="modelingInput.urine_24h.urine_volume_24h_ml" type="number" placeholder="24h尿量(ml)" />
-            <input v-model.number="modelingInput.urine_24h.urine_urea" type="number" placeholder="24h尿尿素" />
-            <input v-model.number="modelingInput.urine_24h.urine_creatinine" type="number" placeholder="24h尿肌酐" />
-          </div>
-          <button class="btn-primary" @click="runIndividualizedModeling">运行个体化建模</button>
-          <div v-if="individualizedResult" class="research-chart-wrap">
-            <div ref="individualizedChartEl" class="research-chart"></div>
-          </div>
-          <div v-if="individualizedResult" class="research-result">
-            <div>转运类型：{{ individualizedResult.transport_type }}</div>
-            <div>残肾Kt/V：{{ individualizedResult.renal_ktv }}</div>
-            <div>残肾肌酐清除率(L/day)：{{ individualizedResult.renal_creatinine_clearance_l_day }}</div>
-            <div>1h钠筛：{{ individualizedResult.sodium_sieving_1h }}</div>
-            <div>腹腔残余液体量(ml)：{{ individualizedResult.residual_intraperitoneal_volume_ml }}</div>
-          </div>
-        </div>
-
-        <div class="research-block">
-          <h3>2) 单次腹透模拟</h3>
+          <h3>1) 单次腹透模拟</h3>
           <div class="mini-grid">
             <select v-model="singleInput.solution_type">
               <option value="glucose">葡萄糖</option>
@@ -298,7 +268,7 @@
         </div>
 
         <div class="research-block">
-          <h3>3) 24小时连续透析</h3>
+          <h3>2) 24小时连续透析</h3>
           <div class="cycle-list">
             <div class="cycle-item" v-for="(c, idx) in continuousInput.cycles" :key="idx">
               <span class="cycle-title">循环{{ idx + 1 }}</span>
@@ -406,6 +376,7 @@
 import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { showToast } from '../utils/toast'
+import { loadModelingForPatient, defaultModelingInput } from '../utils/individualizedModelingStorage.js'
 
 const API_BASE = 'http://localhost:5000/api'
 
@@ -420,12 +391,10 @@ const showCustomDialog = ref(false)
 
 const mainChartEl = ref(null)
 const compareChartEl = ref(null)
-const individualizedChartEl = ref(null)
 const singleChartEl = ref(null)
 const continuousChartEl = ref(null)
 let mainChart = null
 let compareChart = null
-let individualizedChart = null
 let singleChart = null
 let continuousChart = null
 let mainChartTimer = null
@@ -442,16 +411,12 @@ const customRegimen = ref({
 })
 const editingRegimenId = ref(null)
 
-const modelingInput = ref({
-  pet: {
-    d0: { creatinine: 120, glucose: 126, urea: 10 },
-    d2: { creatinine: 380, glucose: 90, urea: 8 },
-    d4: { creatinine: 520, glucose: 70, urea: 6 },
-  },
-  blood_2h: { creatinine: 884, urea: 25.3, glucose: 5.5, sodium: 138 },
-  urine_24h: { urine_volume_24h_ml: 500, urine_urea: 12, urine_creatinine: 9 },
-})
-const individualizedResult = ref(null)
+const urine24h = ref({ ...defaultModelingInput().urine_24h })
+
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('pd_token') || ''
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 const singleInput = ref({
   solution_type: 'glucose',
@@ -503,13 +468,13 @@ const loadPatientData = async () => {
   activePatientName.value = ''
   patientPayload.value = null
   if (!selectedPatientId.value) {
+    urine24h.value = { ...defaultModelingInput().urine_24h }
     simulationResult.value = null
     comparisonResults.value = []
     return
   }
   try {
-    const token = localStorage.getItem('pd_token') || ''
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const headers = getAuthHeaders()
     const resp = await fetch(`${API_BASE}/patients/${selectedPatientId.value}`, { headers })
     const data = await resp.json()
     if (!data.success) {
@@ -518,6 +483,20 @@ const loadPatientData = async () => {
     }
     const p = data.patient
     activePatientName.value = p.name
+    let storedModel = null
+    try {
+      const modelResp = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/individualized-modeling`, { headers })
+      const modelData = await modelResp.json().catch(() => ({}))
+      if (modelData?.success) {
+        storedModel = modelData.modeling || null
+      }
+    } catch (e) {
+      console.error('读取后端建模失败，回退本地存储', e)
+    }
+    if (!storedModel) {
+      storedModel = loadModelingForPatient(selectedPatientId.value)
+    }
+    const transportFromModel = storedModel?.result?.transport_type
     patientPayload.value = {
       patient: {
         name: p.name,
@@ -529,7 +508,7 @@ const loadPatientData = async () => {
         dialysis_vintage: p.dialysis_vintage,
         primary_disease: p.primary_disease,
         residual_kidney_function: p.residual_kidney_function,
-        peritoneal_transport: p.peritoneal_transport,
+        peritoneal_transport: transportFromModel || p.peritoneal_transport,
         urine_volume: p.urine_volume,
         blood_pressure_systolic: p.blood_pressure_systolic,
         blood_pressure_diastolic: p.blood_pressure_diastolic,
@@ -540,6 +519,17 @@ const loadPatientData = async () => {
         potassium: 4.8,
         sodium: 138
       },
+    }
+    if (storedModel?.modelingInput?.urine_24h) {
+      urine24h.value = {
+        ...urine24h.value,
+        ...storedModel.modelingInput.urine_24h,
+      }
+    } else {
+      urine24h.value = {
+        ...defaultModelingInput().urine_24h,
+        urine_volume_24h_ml: p.urine_volume ?? defaultModelingInput().urine_24h.urine_volume_24h_ml,
+      }
     }
     // 同步写入“当前患者”，让优化页也能直接用
     try {
@@ -695,35 +685,6 @@ const editCustomRegimen = (regimen) => {
   showCustomDialog.value = true
 }
 
-const runIndividualizedModeling = async () => {
-  const payload = loadPatientPayload()
-  if (!payload) return
-  try {
-    const resp = await fetch(`${API_BASE}/modeling/individualized`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        patient: payload.patient,
-        pet: modelingInput.value.pet,
-        blood_2h: modelingInput.value.blood_2h,
-        urine_24h: modelingInput.value.urine_24h,
-      }),
-    })
-    const data = await resp.json().catch(() => ({}))
-    if (!data.success) {
-      showToast(data.error || '个体化建模失败', 'error')
-      return
-    }
-    individualizedResult.value = data.result || null
-    await nextTick()
-    renderIndividualizedChart()
-    showToast('个体化建模完成', 'success')
-  } catch (e) {
-    console.error(e)
-    showToast('个体化建模失败', 'error')
-  }
-}
-
 const runSingleExchange = async () => {
   const payload = loadPatientPayload()
   if (!payload) return
@@ -773,7 +734,7 @@ const runContinuous24h = async () => {
         biomarkers: payload.biomarkers,
         drain_minutes: continuousInput.value.drain_minutes,
         cycles: continuousInput.value.cycles,
-        urine_24h: modelingInput.value.urine_24h,
+        urine_24h: urine24h.value,
       }),
     })
     const data = await resp.json().catch(() => ({}))
@@ -789,49 +750,6 @@ const runContinuous24h = async () => {
     console.error(e)
     showToast('24小时模拟失败', 'error')
   }
-}
-
-const renderIndividualizedChart = () => {
-  if (!individualizedChartEl.value || !individualizedResult.value) return
-  if (!individualizedChart) individualizedChart = echarts.init(individualizedChartEl.value)
-
-  const r = individualizedResult.value
-  const values = [
-    Number(r.renal_ktv || 0),
-    Number(r.renal_creatinine_clearance_l_day || 0),
-    Number(r.sodium_sieving_1h || 0),
-    Number((r.residual_intraperitoneal_volume_ml || 0) / 100),
-  ]
-  const indicator = [
-    { name: '残肾Kt/V', max: 2 },
-    { name: '残肾肌酐清除', max: 20 },
-    { name: '1h钠筛', max: 20 },
-    { name: '残余液体量/100', max: 10 },
-  ]
-
-  individualizedChart.setOption(
-    {
-      backgroundColor: '#fff',
-      tooltip: {},
-      radar: {
-        indicator,
-        splitLine: { lineStyle: { color: '#e2e8f0' } },
-        splitArea: { areaStyle: { color: ['#fff', '#f8fafc'] } },
-        axisLine: { lineStyle: { color: '#cbd5e1' } },
-      },
-      series: [
-        {
-          type: 'radar',
-          data: [{ value: values, name: '个体化评估' }],
-          lineStyle: { color: '#4f46e5', width: 2 },
-          areaStyle: { color: 'rgba(79,70,229,0.18)' },
-          symbol: 'circle',
-          symbolSize: 6,
-        },
-      ],
-    },
-    true,
-  )
 }
 
 const renderSingleExchangeChart = () => {
@@ -1251,10 +1169,6 @@ onBeforeUnmount(() => {
     compareChart.dispose()
     compareChart = null
   }
-  if (individualizedChart) {
-    individualizedChart.dispose()
-    individualizedChart = null
-  }
   if (singleChart) {
     singleChart.dispose()
     singleChart = null
@@ -1586,9 +1500,18 @@ onBeforeUnmount(() => {
 .research-card {
   margin-top: 14px;
 }
+.research-tip {
+  font-size: 13px;
+  color: #475569;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
 .research-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .research-block {

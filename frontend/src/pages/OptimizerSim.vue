@@ -91,74 +91,6 @@
           </div>
         </div>
 
-        <div class="section-card">
-          <h2>③ 每轮可调：透析液/阶段范围（phase template）</h2>
-          <div class="hint">
-            这是给优化算法的“搜索范围”。你可以在每轮优化前调整（例如提高葡萄糖范围、增大灌注量范围、缩短/拉长留置时间范围），
-            看是否更容易达到目标。
-          </div>
-
-          <div class="template-table">
-            <div class="thead">
-              <div>阶段</div>
-              <div>留置(min)</div>
-              <div>灌注(L)</div>
-              <div>葡萄糖(%)</div>
-              <div></div>
-            </div>
-            <div v-for="(t, idx) in phaseTemplate" :key="idx" class="trow">
-              <div>
-                <input v-model="t.phase_name" />
-              </div>
-              <div class="range">
-                <input v-model.number="t.dwell_min[0]" type="number" step="10" min="30" />
-                <span>~</span>
-                <input v-model.number="t.dwell_min[1]" type="number" step="10" min="30" />
-              </div>
-              <div class="range">
-                <input v-model.number="t.fill_volume_l[0]" type="number" step="0.1" min="0.5" />
-                <span>~</span>
-                <input v-model.number="t.fill_volume_l[1]" type="number" step="0.1" min="0.5" />
-              </div>
-              <div class="range">
-                <input v-model.number="t.glucose_pct[0]" type="number" step="0.25" min="1.0" />
-                <span>~</span>
-                <input v-model.number="t.glucose_pct[1]" type="number" step="0.25" min="1.0" />
-              </div>
-              <div>
-                <button class="btn-mini danger" :disabled="phaseTemplate.length <= 1" @click="removeTemplateRow(idx)">
-                  删除
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="row-actions">
-            <button class="btn-secondary" @click="addTemplateRow">➕ 增加阶段</button>
-            <button class="btn-secondary" @click="resetTemplate">重置默认范围</button>
-          </div>
-
-          <button class="btn-primary" :disabled="loading" @click="runOneRound">
-            {{ loading ? '⏳ 优化中...' : '④ 运行一轮优化并记录' }}
-          </button>
-          <div v-if="loading" class="progress-wrap">
-            <div class="progress-head">
-              <span>优化进度</span>
-              <span>{{ Math.round(progress * 100) }}%</span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-fill" :style="{ width: `${Math.round(progress * 100)}%` }"></div>
-            </div>
-            <div class="progress-sub">
-              第 {{ progressGen }} / {{ progressTotal }} 代 · 当前最佳 fitness={{ progressBest.toFixed(4) }}
-            </div>
-          </div>
-
-          <div class="row-actions">
-            <button class="btn-secondary" :disabled="!rounds.length" @click="clearRounds">清空历史轮次</button>
-          </div>
-        </div>
-
         <div v-if="latestRound" class="section-card">
           <h2>⑤ 保存本轮最优方案</h2>
           <div class="form-group">
@@ -172,11 +104,85 @@
       <div class="right">
         <div class="section-card">
           <h2>对比坐标图（基线 vs 每轮优化）</h2>
-          <div class="chart-container">
-            <canvas ref="historyChartCanvas"></canvas>
-          </div>
-          <div class="hint" style="margin-top: 8px">
-            图里第 0 个点是“基线”，后面的点是你每次点“运行一轮优化并记录”得到的结果。
+          <div class="chart-opt-stack">
+            <div class="chart-col">
+              <div class="chart-container chart-container--stacked">
+                <canvas ref="historyChartCanvas"></canvas>
+              </div>
+              <div class="hint hint--tight">
+                图里第 0 个点是“基线”，后面的点是你每次点「运行一轮优化并记录」得到的结果。
+              </div>
+            </div>
+            <div class="opt-panel-below">
+              <h3 class="opt-panel-below-title">③ 每轮可调：透析液/阶段范围（phase template）</h3>
+              <div class="hint hint--below-opt">
+                这是给优化算法的「搜索范围」。每轮前可收紧/放宽留置、灌注、葡萄糖区间，看是否更容易达标。
+              </div>
+
+              <div class="template-table template-table--below-chart">
+                <div class="thead">
+                  <div>阶段</div>
+                  <div>留置(min)</div>
+                  <div>灌注(L)</div>
+                  <div>葡萄糖(%)</div>
+                  <div></div>
+                </div>
+                <div v-for="(t, idx) in phaseTemplate" :key="idx" class="trow">
+                  <div>
+                    <input v-model="t.phase_name" />
+                  </div>
+                  <div class="range">
+                    <input v-model.number="t.dwell_min[0]" type="number" step="10" min="30" />
+                    <span>~</span>
+                    <input v-model.number="t.dwell_min[1]" type="number" step="10" min="30" />
+                  </div>
+                  <div class="range">
+                    <input v-model.number="t.fill_volume_l[0]" type="number" step="0.1" min="0.5" />
+                    <span>~</span>
+                    <input v-model.number="t.fill_volume_l[1]" type="number" step="0.1" min="0.5" />
+                  </div>
+                  <div class="range">
+                    <input v-model.number="t.glucose_pct[0]" type="number" step="0.25" min="1.0" />
+                    <span>~</span>
+                    <input v-model.number="t.glucose_pct[1]" type="number" step="0.25" min="1.0" />
+                  </div>
+                  <div>
+                    <button class="btn-mini danger" :disabled="phaseTemplate.length <= 1" @click="removeTemplateRow(idx)">
+                      删除
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row-actions row-actions--tight">
+                <button class="btn-secondary" @click="addTemplateRow">➕ 增加阶段</button>
+                <button class="btn-secondary" @click="resetTemplate">重置默认范围</button>
+              </div>
+
+              <button class="btn-primary" :disabled="loading" @click="runOneRound">
+                {{ loading ? '⏳ 优化中...' : '④ 运行一轮优化并记录' }}
+              </button>
+              <div v-if="loading" class="progress-wrap">
+                <div class="progress-head">
+                  <span>优化进度</span>
+                  <span>{{ progressPercentLabel }}%</span>
+                </div>
+                <div class="progress-bar">
+                  <div
+                    class="progress-fill"
+                    :class="{ 'progress-fill--active': loading }"
+                    :style="{ width: `${progressBarWidthPct}%` }"
+                  />
+                </div>
+                <div class="progress-sub">
+                  第 {{ progressGen }} / {{ progressTotal }} 代 · 当前最佳 fitness={{ progressBest.toFixed(4) }}
+                </div>
+              </div>
+
+              <div class="row-actions row-actions--tight">
+                <button class="btn-secondary" :disabled="!rounds.length" @click="clearRounds">清空历史轮次</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -233,7 +239,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import { showToast } from '../utils/toast'
 
@@ -246,10 +252,49 @@ const durationHours = ref(24)
 const populationSize = ref(40)
 const generations = ref(25)
 const loading = ref(false)
-const progress = ref(0)
+/** 后端按“代”回传的进度（阶梯状） */
+const progressServer = ref(0)
+/** 用于界面展示的平滑进度（帧动画 + 缓慢爬升，避免长时间静止） */
+const progressSmooth = ref(0)
 const progressGen = ref(0)
 const progressTotal = ref(0)
 const progressBest = ref(0)
+
+let progressRafId = null
+
+const progressPercentLabel = computed(() =>
+  Math.min(100, Math.max(0, Math.round(progressSmooth.value * 100))),
+)
+
+const progressBarWidthPct = computed(() =>
+  Math.min(100, Math.max(0, progressSmooth.value * 100)),
+)
+
+const stopProgressAnim = () => {
+  if (progressRafId != null) {
+    cancelAnimationFrame(progressRafId)
+    progressRafId = null
+  }
+}
+
+const startProgressAnim = () => {
+  stopProgressAnim()
+  const tick = () => {
+    if (!loading.value) {
+      stopProgressAnim()
+      return
+    }
+    const tgt = Math.min(Math.max(Number(progressServer.value) || 0, 0), 1)
+    let cur = progressSmooth.value
+    cur += (tgt - cur) * 0.22
+    if (tgt < 1 && cur < tgt + 0.14) {
+      cur = Math.min(cur + 0.002, tgt + 0.14, 0.97)
+    }
+    progressSmooth.value = Math.min(cur, 0.999)
+    progressRafId = requestAnimationFrame(tick)
+  }
+  progressRafId = requestAnimationFrame(tick)
+}
 
 const baseline = ref(null) // { regimenName, summary }
 const baselineResults = ref(null) // full results for curves
@@ -392,10 +437,13 @@ const runOneRound = async () => {
   }
 
   loading.value = true
-  progress.value = 0
+  progressServer.value = 0
+  progressSmooth.value = 0
   progressGen.value = 0
   progressTotal.value = generations.value
   progressBest.value = 0
+  startProgressAnim()
+  let runSucceeded = false
   try {
     // 先启动异步任务
     const startResp = await fetch(`${API_BASE}/optimize/freeform/async`, {
@@ -424,7 +472,7 @@ const runOneRound = async () => {
       const d = await r.json().catch(() => ({}))
       if (!d.success || !d.job) throw new Error(d.error || '获取进度失败')
       const job = d.job
-      progress.value = Number(job.progress || 0)
+      progressServer.value = Number(job.progress || 0)
       progressGen.value = Number(job.current_generation || 0)
       progressTotal.value = Number(job.total_generations || generations.value)
       progressBest.value = Number(job.best_fitness || 0)
@@ -496,11 +544,20 @@ const runOneRound = async () => {
 
     renderHistoryChart()
     renderCurveChart()
+    runSucceeded = true
   } catch (e) {
     console.error(e)
     window.alert('优化失败，请检查后端是否正常运行')
   } finally {
+    stopProgressAnim()
     loading.value = false
+    if (runSucceeded) {
+      progressServer.value = 1
+      progressSmooth.value = 1
+    } else {
+      progressServer.value = 0
+      progressSmooth.value = 0
+    }
   }
 }
 
@@ -752,12 +809,18 @@ onMounted(() => {
   // 初次渲染
   setTimeout(renderHistoryChart, 0)
 })
+
+onBeforeUnmount(() => {
+  stopProgressAnim()
+})
 </script>
 
 <style scoped>
 .page {
-  max-width: 1400px;
+  max-width: min(1840px, 100%);
   margin: 0 auto;
+  padding: 0 16px;
+  box-sizing: border-box;
 }
 .header {
   margin-bottom: 16px;
@@ -775,8 +838,17 @@ onMounted(() => {
 }
 .main {
   display: grid;
-  grid-template-columns: 1.2fr 1.3fr;
-  gap: 16px;
+  /* 左侧参数区收窄，右侧图表与数据占绝大部分宽度 */
+  grid-template-columns: clamp(260px, 22vw, 360px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.left,
+.right {
+  min-width: 0;
+}
+.left .form-grid {
+  grid-template-columns: 1fr;
 }
 .section-card {
   background: rgba(255, 255, 255, 0.95);
@@ -795,6 +867,82 @@ onMounted(() => {
   font-size: 13px;
   color: rgba(31, 35, 64, 0.7);
   margin-bottom: 10px;
+}
+.hint--tight {
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 12px;
+}
+.hint--below-opt {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(31, 35, 64, 0.72);
+  margin-bottom: 12px;
+}
+/* 上图、下控制区：全宽，避免侧栏挤扁表格 */
+.chart-opt-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: stretch;
+}
+.chart-col {
+  min-width: 0;
+  width: 100%;
+}
+.opt-panel-below {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #fafbff 0%, #fff 100%);
+}
+.opt-panel-below-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #1f2340;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #667eea;
+}
+.row-actions--tight {
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+/* 图下方全宽表格：列宽充足，数字不被裁切 */
+.template-table--below-chart .thead,
+.template-table--below-chart .trow {
+  grid-template-columns: minmax(72px, 1fr) minmax(160px, 1.35fr) minmax(140px, 1.2fr) minmax(160px, 1.35fr) minmax(64px, auto);
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.template-table--below-chart .thead > div:first-child,
+.template-table--below-chart .trow > div:first-child {
+  min-width: 0;
+}
+.template-table--below-chart .trow > div:first-child input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.template-table--below-chart .range {
+  flex-wrap: nowrap;
+}
+.template-table--below-chart .range input {
+  padding: 8px 10px;
+  font-size: 13px;
+  min-width: 48px;
+  flex: 1 1 0;
+}
+.template-table--below-chart .btn-mini {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.opt-panel-below .btn-primary {
+  margin-top: 10px;
 }
 .form-grid {
   display: grid;
@@ -1010,9 +1158,22 @@ input {
 }
 .progress-fill {
   height: 100%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   width: 0%;
-  transition: width 0.3s ease;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #667eea 0%, #a78bfa 45%, #764ba2 100%);
+  background-size: 220% 100%;
+  will-change: width, background-position;
+}
+.progress-fill--active {
+  animation: optProgressShimmer 1.1s linear infinite;
+}
+@keyframes optProgressShimmer {
+  0% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 100% 0;
+  }
 }
 .progress-sub {
   margin-top: 8px;
@@ -1020,10 +1181,13 @@ input {
   color: rgba(31, 35, 64, 0.65);
 }
 .chart-container {
-  height: 420px;
+  height: min(480px, 58vh);
+}
+.chart-container--stacked {
+  height: min(460px, 50vh);
 }
 .curve-chart {
-  height: 420px;
+  height: min(480px, 55vh);
   margin-top: 10px;
 }
 .select {
@@ -1077,13 +1241,31 @@ input {
   background: rgba(244, 67, 54, 0.12);
   color: #c62828;
 }
+@media (max-width: 1200px) {
+  .main {
+    grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
+  }
+  .chart-container--stacked {
+    height: min(400px, 45vh);
+  }
+}
 @media (max-width: 1024px) {
   .main {
     grid-template-columns: 1fr;
   }
+  .left .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .thead,
   .trow {
     grid-template-columns: 1fr;
+  }
+  .template-table--below-chart .thead,
+  .template-table--below-chart .trow {
+    grid-template-columns: 1fr;
+  }
+  .template-table--below-chart .range {
+    flex-wrap: wrap;
   }
 }
 </style>

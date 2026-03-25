@@ -100,6 +100,9 @@ class Patient(db.Model):
     urine_volume = db.Column(db.Float)
     blood_pressure_systolic = db.Column(db.Float)
     blood_pressure_diastolic = db.Column(db.Float)
+    individualized_model_input = db.Column(db.JSON)
+    individualized_model_result = db.Column(db.JSON)
+    individualized_model_updated_at = db.Column(db.DateTime)
     
     # 生化指标
     creatinine = db.Column(db.Float)
@@ -145,6 +148,9 @@ class Patient(db.Model):
             'urine_volume': self.urine_volume,
             'blood_pressure_systolic': self.blood_pressure_systolic,
             'blood_pressure_diastolic': self.blood_pressure_diastolic,
+            'individualized_model_input': self.individualized_model_input,
+            'individualized_model_result': self.individualized_model_result,
+            'individualized_model_updated_at': self.individualized_model_updated_at.isoformat() if self.individualized_model_updated_at else None,
             'biomarkers': {
                 'creatinine': self.creatinine,
                 'bun': self.bun,
@@ -493,6 +499,12 @@ def apply_schema_migrations(app):
             alterations.append("ALTER TABLE patients ADD COLUMN owner_org VARCHAR(120)")
         if not _column_exists(inspector, 'patients', 'is_shared'):
             alterations.append("ALTER TABLE patients ADD COLUMN is_shared BOOLEAN DEFAULT 0")
+        if not _column_exists(inspector, 'patients', 'individualized_model_input'):
+            alterations.append("ALTER TABLE patients ADD COLUMN individualized_model_input JSON")
+        if not _column_exists(inspector, 'patients', 'individualized_model_result'):
+            alterations.append("ALTER TABLE patients ADD COLUMN individualized_model_result JSON")
+        if not _column_exists(inspector, 'patients', 'individualized_model_updated_at'):
+            alterations.append("ALTER TABLE patients ADD COLUMN individualized_model_updated_at DATETIME")
         
         for statement in alterations:
             with db.engine.begin() as connection:

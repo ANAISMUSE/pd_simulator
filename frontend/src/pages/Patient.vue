@@ -146,6 +146,94 @@
             </div>
           </div>
         </div>
+
+        <div class="section-card modeling-card">
+          <h2>📐 三孔个体化建模</h2>
+          <p class="modeling-intro">
+            在上方填写患者基本信息（年龄、性别、身高、体重、血压）与生化后，录入单次腹膜平衡试验（PET）数据并运行建模。结果会绑定到当前患者，进入「方案模拟」时将自动采用该患者的转运类型与
+            24h 尿相关参数。
+          </p>
+          <div class="modeling-summary">
+            <span>当前患者：{{ patient.name || '（未命名）' }}</span>
+            <span v-if="selectedPatientId">ID：{{ selectedPatientId }}</span>
+            <span v-else class="warn">请先保存患者档案后再「保存建模到患者」</span>
+          </div>
+
+          <h3 class="subsection-title">单次腹膜平衡试验（腹透液）</h3>
+          <div class="modeling-grid">
+            <div class="modeling-group">
+              <div class="mg-title">0 小时</div>
+              <input v-model.number="modelingInput.pet.d0.creatinine" type="number" placeholder="肌酐" />
+              <input v-model.number="modelingInput.pet.d0.glucose" type="number" placeholder="葡萄糖" />
+              <input v-model.number="modelingInput.pet.d0.urea" type="number" placeholder="尿素" />
+            </div>
+            <div class="modeling-group">
+              <div class="mg-title">2 小时</div>
+              <input v-model.number="modelingInput.pet.d2.creatinine" type="number" placeholder="肌酐" />
+              <input v-model.number="modelingInput.pet.d2.glucose" type="number" placeholder="葡萄糖" />
+              <input v-model.number="modelingInput.pet.d2.urea" type="number" placeholder="尿素" />
+            </div>
+            <div class="modeling-group">
+              <div class="mg-title">4 小时</div>
+              <input v-model.number="modelingInput.pet.d4.creatinine" type="number" placeholder="肌酐" />
+              <input v-model.number="modelingInput.pet.d4.glucose" type="number" placeholder="葡萄糖" />
+              <input v-model.number="modelingInput.pet.d4.urea" type="number" placeholder="尿素" />
+            </div>
+          </div>
+
+          <h3 class="subsection-title">2 小时血液</h3>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>血肌酐</label>
+              <input v-model.number="modelingInput.blood_2h.creatinine" type="number" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>血尿素</label>
+              <input v-model.number="modelingInput.blood_2h.urea" type="number" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>血葡萄糖</label>
+              <input v-model.number="modelingInput.blood_2h.glucose" type="number" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>血钠</label>
+              <input v-model.number="modelingInput.blood_2h.sodium" type="number" step="0.1" />
+            </div>
+          </div>
+
+          <h3 class="subsection-title">24 小时尿液</h3>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>尿量 (ml)</label>
+              <input v-model.number="modelingInput.urine_24h.urine_volume_24h_ml" type="number" />
+            </div>
+            <div class="form-group">
+              <label>尿尿素</label>
+              <input v-model.number="modelingInput.urine_24h.urine_urea" type="number" step="0.1" />
+            </div>
+            <div class="form-group">
+              <label>尿肌酐</label>
+              <input v-model.number="modelingInput.urine_24h.urine_creatinine" type="number" step="0.1" />
+            </div>
+          </div>
+
+          <div class="modeling-actions">
+            <button type="button" class="btn-modeling primary" @click="runIndividualizedModeling">运行个体化建模</button>
+            <button type="button" class="btn-modeling" :disabled="!selectedPatientId" @click="persistIndividualizedModel">保存建模到患者</button>
+          </div>
+          <p v-if="modelingSavedAt" class="modeling-saved">已保存：{{ modelingSavedAt }}</p>
+
+          <div v-if="individualizedResult" class="modeling-chart-wrap">
+            <div ref="individualizedChartEl" class="modeling-chart"></div>
+          </div>
+          <div v-if="individualizedResult" class="modeling-result">
+            <div><strong>腹膜转运类型：</strong>{{ individualizedResult.transport_type }}</div>
+            <div><strong>残余肾 Kt/V：</strong>{{ individualizedResult.renal_ktv }}</div>
+            <div><strong>残余肾肌酐清除率 (L/天)：</strong>{{ individualizedResult.renal_creatinine_clearance_l_day }}</div>
+            <div><strong>模拟 1h 钠筛：</strong>{{ individualizedResult.sodium_sieving_1h }}</div>
+            <div><strong>腹腔残余液体量 (ml)：</strong>{{ individualizedResult.residual_intraperitoneal_volume_ml }}</div>
+          </div>
+        </div>
       </div>
 
       <div class="right">
@@ -286,73 +374,163 @@
             </div>
           </div>
         </div>
-
-        <div class="section-card">
-          <h2>🧾 检查记录</h2>
-          <div class="record-form">
-            <input v-model.trim="checkForm.project_name" type="text" placeholder="检查项目（如：血钾）" />
-            <input v-model.trim="checkForm.result_value" type="text" placeholder="结果值" />
-            <input v-model.trim="checkForm.unit" type="text" placeholder="单位" />
-            <button class="btn-save-patient" @click="addCheckRecord">新增检查</button>
-          </div>
-          <div class="record-list">
-            <div v-for="item in checkRecords" :key="item.id" class="record-item">
-              <span>{{ item.checked_at }} | {{ item.project_name }}</span>
-              <span>{{ item.result_value || '-' }} {{ item.unit || '' }}</span>
-            </div>
-            <div v-if="!checkRecords.length" class="record-empty">暂无检查记录</div>
-          </div>
-        </div>
-
-        <div class="section-card">
-          <h2>📚 方案使用历史</h2>
-          <div class="record-form">
-            <select v-model.number="usageTemplateId">
-              <option :value="0">选择模板（可选）</option>
-              <option v-for="item in regimenList" :key="item.id" :value="item.id">{{ item.name }}</option>
-            </select>
-            <label class="share-label">
-              <input v-model="promoteAsTemplate" type="checkbox" />
-              <span>将本次改动升级为新模板</span>
-            </label>
-            <button class="btn-save-patient" @click="addRegimenUsage">新增使用记录</button>
-          </div>
-          <textarea
-            v-model="usageSnapshotText"
-            class="usage-json"
-            placeholder='方案快照 JSON，例如 {"phases":[{"phase_name":"夜间","duration":8,"glucose_conc":1.5,"fill_volume":2.0}]}'
-          />
-          <div class="record-list">
-            <div v-for="item in regimenUsages" :key="item.id" class="record-item">
-              <span>记录#{{ item.id }} 模板: {{ item.template_id || '无' }}</span>
-              <span>升级模板: {{ item.promoted_template_id || '无' }}</span>
-            </div>
-            <div v-if="!regimenUsages.length" class="record-empty">暂无方案使用记录</div>
-          </div>
-        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, nextTick, onBeforeUnmount } from 'vue'
+import * as echarts from 'echarts'
+import { showToast } from '../utils/toast'
+import {
+  defaultModelingInput,
+  loadModelingForPatient,
+  saveModelingForPatient,
+} from '../utils/individualizedModelingStorage.js'
 
 const API_BASE = 'http://localhost:5000/api'
 
 const patientsList = ref([])
 const selectedPatientId = ref(null)
-const checkRecords = ref([])
-const regimenUsages = ref([])
-const regimenList = ref([])
-const usageTemplateId = ref(0)
-const promoteAsTemplate = ref(false)
-const usageSnapshotText = ref('{"phases":[]}')
-const checkForm = ref({
-  project_name: '',
-  result_value: '',
-  unit: '',
-})
+
+const modelingInput = ref(defaultModelingInput())
+const individualizedResult = ref(null)
+const individualizedChartEl = ref(null)
+let individualizedChart = null
+const modelingSavedAt = ref('')
+
+const getAuthHeaders = (json = false) => {
+  const token = localStorage.getItem('pd_token') || ''
+  return {
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+const syncModelingFromPatientForm = () => {
+  const b = biomarkers.value
+  const p = patient.value
+  modelingInput.value.blood_2h.creatinine = b.creatinine ?? modelingInput.value.blood_2h.creatinine
+  modelingInput.value.blood_2h.urea = b.bun ?? modelingInput.value.blood_2h.urea
+  modelingInput.value.blood_2h.glucose = b.glucose ?? modelingInput.value.blood_2h.glucose
+  modelingInput.value.blood_2h.sodium = b.sodium ?? modelingInput.value.blood_2h.sodium
+  if (p.urine_volume != null) {
+    modelingInput.value.urine_24h.urine_volume_24h_ml = p.urine_volume
+  }
+}
+
+const mergeStoredModelingInput = (stored) => {
+  const d = defaultModelingInput()
+  if (!stored?.modelingInput) return d
+  const m = stored.modelingInput
+  return {
+    pet: {
+      d0: { ...d.pet.d0, ...(m.pet?.d0 || {}) },
+      d2: { ...d.pet.d2, ...(m.pet?.d2 || {}) },
+      d4: { ...d.pet.d4, ...(m.pet?.d4 || {}) },
+    },
+    blood_2h: { ...d.blood_2h, ...(m.blood_2h || {}) },
+    urine_24h: { ...d.urine_24h, ...(m.urine_24h || {}) },
+  }
+}
+
+const loadPersistedIndividualizedModel = async () => {
+  individualizedResult.value = null
+  modelingSavedAt.value = ''
+  if (!selectedPatientId.value) {
+    modelingInput.value = mergeStoredModelingInput(null)
+    syncModelingFromPatientForm()
+    if (individualizedChart) {
+      individualizedChart.dispose()
+      individualizedChart = null
+    }
+    return
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/individualized-modeling`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await resp.json().catch(() => ({}))
+    const backendModeling = data?.success ? (data.modeling || null) : null
+    const localModeling = loadModelingForPatient(selectedPatientId.value)
+    const stored = backendModeling || localModeling
+    modelingInput.value = mergeStoredModelingInput(stored)
+    if (!stored?.modelingInput) {
+      syncModelingFromPatientForm()
+    }
+    if (stored?.result) {
+      individualizedResult.value = stored.result
+      modelingSavedAt.value = stored.updatedAt || ''
+      await nextTick()
+      renderIndividualizedChart()
+    } else if (individualizedChart) {
+      individualizedChart.dispose()
+      individualizedChart = null
+    }
+  } catch (e) {
+    console.error('读取后端建模失败，回退本地存储:', e)
+    const stored = loadModelingForPatient(selectedPatientId.value)
+    modelingInput.value = mergeStoredModelingInput(stored)
+    if (!stored?.modelingInput) {
+      syncModelingFromPatientForm()
+    }
+    if (stored?.result) {
+      individualizedResult.value = stored.result
+      modelingSavedAt.value = stored.updatedAt || ''
+      await nextTick()
+      renderIndividualizedChart()
+    } else if (individualizedChart) {
+      individualizedChart.dispose()
+      individualizedChart = null
+    }
+  }
+}
+
+const renderIndividualizedChart = () => {
+  if (!individualizedChartEl.value || !individualizedResult.value) return
+  if (!individualizedChart || individualizedChart.getDom() !== individualizedChartEl.value) {
+    if (individualizedChart) individualizedChart.dispose()
+    individualizedChart = echarts.init(individualizedChartEl.value)
+  }
+  const r = individualizedResult.value
+  const values = [
+    Number(r.renal_ktv || 0),
+    Number(r.renal_creatinine_clearance_l_day || 0),
+    Number(r.sodium_sieving_1h || 0),
+    Number((r.residual_intraperitoneal_volume_ml || 0) / 100),
+  ]
+  const indicator = [
+    { name: '残肾Kt/V', max: 2 },
+    { name: '残肾肌酐清除', max: 20 },
+    { name: '1h钠筛', max: 20 },
+    { name: '残余液体量/100', max: 10 },
+  ]
+  individualizedChart.setOption(
+    {
+      backgroundColor: '#fff',
+      tooltip: {},
+      radar: {
+        indicator,
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
+        splitArea: { areaStyle: { color: ['#fff', '#f8fafc'] } },
+        axisLine: { lineStyle: { color: '#cbd5e1' } },
+      },
+      series: [
+        {
+          type: 'radar',
+          data: [{ value: values, name: '个体化评估' }],
+          lineStyle: { color: '#4f46e5', width: 2 },
+          areaStyle: { color: 'rgba(79,70,229,0.18)' },
+          symbol: 'circle',
+          symbolSize: 6,
+        },
+      ],
+    },
+    true,
+  )
+  individualizedChart.resize()
+}
 const patientImportFormat = ref('xlsx')
 const patientImportFile = ref(null)
 const patientValidateSummary = ref('')
@@ -432,7 +610,6 @@ const loadFromStorage = () => {
 onMounted(async () => {
   loadFromStorage()
   await loadPatientsList()
-  await loadRegimenList()
 })
 
 const loadPatientsList = async () => {
@@ -449,18 +626,6 @@ const loadPatientsList = async () => {
   }
 }
 
-const loadRegimenList = async () => {
-  try {
-    const response = await fetch(`${API_BASE}/regimens`)
-    const data = await response.json()
-    if (data.success) {
-      regimenList.value = data.regimens || []
-    }
-  } catch (error) {
-    console.error('加载方案模板失败:', error)
-  }
-}
-
 const safeJson = async (resp) => {
   try {
     return await resp.json()
@@ -469,15 +634,12 @@ const safeJson = async (resp) => {
   }
 }
 
-import { showToast } from '../utils/toast'
-
 const loadPatientData = async () => {
   if (!selectedPatientId.value) {
     patient.value = defaultPatient()
     biomarkers.value = defaultBiomarkers()
-    checkRecords.value = []
-    regimenUsages.value = []
     saveCurrentToStorage()
+    await loadPersistedIndividualizedModel()
     return
   }
 
@@ -502,33 +664,16 @@ const loadPatientData = async () => {
         urine_volume: p.urine_volume,
         blood_pressure_systolic: p.blood_pressure_systolic,
         blood_pressure_diastolic: p.blood_pressure_diastolic,
+        is_shared: !!p.is_shared,
       }
       biomarkers.value = p.biomarkers
       saveCurrentToStorage()
-      await loadPatientRecords()
+      await loadPersistedIndividualizedModel()
       showToast(`已加载患者：${p.name}`, 'success')
     }
   } catch (error) {
     console.error('加载患者数据失败:', error)
     showToast('加载患者数据失败', 'error')
-  }
-}
-
-const loadPatientRecords = async () => {
-  if (!selectedPatientId.value) return
-  try {
-    const token = localStorage.getItem('pd_token') || ''
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
-    const [checksResp, usagesResp] = await Promise.all([
-      fetch(`${API_BASE}/patients/${selectedPatientId.value}/checks`, { headers }),
-      fetch(`${API_BASE}/patients/${selectedPatientId.value}/regimen-usages`, { headers }),
-    ])
-    const checksData = await checksResp.json().catch(() => ({}))
-    const usagesData = await usagesResp.json().catch(() => ({}))
-    checkRecords.value = checksData.checks || []
-    regimenUsages.value = usagesData.usages || []
-  } catch (error) {
-    console.error('加载患者记录失败:', error)
   }
 }
 
@@ -609,61 +754,92 @@ const deletePatient = async () => {
   }
 }
 
-const addCheckRecord = async () => {
-  if (!selectedPatientId.value) return showToast('请先选择患者', 'info')
-  if (!checkForm.value.project_name.trim()) return showToast('请填写检查项目', 'info')
+const buildModelingPatientBody = () => ({
+  name: patient.value.name,
+  gender: patient.value.gender,
+  age: patient.value.age,
+  weight: patient.value.weight,
+  height: patient.value.height,
+  bsa: patient.value.bsa,
+  blood_pressure_systolic: patient.value.blood_pressure_systolic,
+  blood_pressure_diastolic: patient.value.blood_pressure_diastolic,
+})
+
+const runIndividualizedModeling = async () => {
+  if (!patient.value.name?.trim()) {
+    showToast('请先填写患者姓名', 'info')
+    return
+  }
   try {
-    const token = localStorage.getItem('pd_token') || ''
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/checks`, {
+    const resp = await fetch(`${API_BASE}/modeling/individualized`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(checkForm.value),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patient: buildModelingPatientBody(),
+        pet: modelingInput.value.pet,
+        blood_2h: modelingInput.value.blood_2h,
+        urine_24h: modelingInput.value.urine_24h,
+      }),
     })
-    const data = await response.json().catch(() => ({}))
-    if (!data.success) return showToast(data.error || '新增检查失败', 'error')
-    checkForm.value = { project_name: '', result_value: '', unit: '' }
-    await loadPatientRecords()
-    showToast('检查记录已新增', 'success')
-  } catch (error) {
-    console.error('新增检查失败:', error)
-    showToast('新增检查失败', 'error')
+    const data = await resp.json().catch(() => ({}))
+    if (!data.success) {
+      showToast(data.error || '个体化建模失败', 'error')
+      return
+    }
+    individualizedResult.value = data.result || null
+    const tt = individualizedResult.value?.transport_type
+    if (tt) {
+      patient.value.peritoneal_transport = tt
+    }
+    await nextTick()
+    renderIndividualizedChart()
+    showToast('个体化建模完成，腹膜转运类型已写入当前表单（保存患者可同步到服务器）', 'success')
+  } catch (e) {
+    console.error(e)
+    showToast('个体化建模失败', 'error')
   }
 }
 
-const addRegimenUsage = async () => {
-  if (!selectedPatientId.value) return showToast('请先选择患者', 'info')
-  let snapshot = {}
-  try {
-    snapshot = JSON.parse(usageSnapshotText.value || '{}')
-  } catch {
-    return showToast('方案快照 JSON 格式错误', 'error')
+const persistIndividualizedModel = async () => {
+  if (!selectedPatientId.value) {
+    showToast('请先保存患者档案，再保存建模', 'info')
+    return
   }
+  if (!individualizedResult.value) {
+    showToast('请先运行个体化建模', 'info')
+    return
+  }
+  const localSaved = saveModelingForPatient(selectedPatientId.value, {
+    modelingInput: JSON.parse(JSON.stringify(modelingInput.value)),
+    result: JSON.parse(JSON.stringify(individualizedResult.value)),
+  })
+  if (!localSaved) {
+    showToast('本地缓存建模失败，将继续尝试后端保存', 'info')
+  }
+
   try {
-    const token = localStorage.getItem('pd_token') || ''
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/regimen-usages`, {
-      method: 'POST',
-      headers,
+    const response = await fetch(`${API_BASE}/patients/${selectedPatientId.value}/individualized-modeling`, {
+      method: 'PUT',
+      headers: getAuthHeaders(true),
       body: JSON.stringify({
-        template_id: usageTemplateId.value || null,
-        regimen_snapshot: snapshot,
-        promote_as_template: promoteAsTemplate.value,
+        modelingInput: JSON.parse(JSON.stringify(modelingInput.value)),
+        result: JSON.parse(JSON.stringify(individualizedResult.value)),
       }),
     })
     const data = await response.json().catch(() => ({}))
-    if (!data.success) return showToast(data.error || '新增方案使用记录失败', 'error')
-    await loadPatientRecords()
-    showToast('方案使用记录已新增', 'success')
-  } catch (error) {
-    console.error('新增方案使用记录失败:', error)
-    showToast('新增方案使用记录失败', 'error')
+    if (!data.success) {
+      showToast(data.error || '后端保存建模失败', 'error')
+      return
+    }
+    if (data.modeling?.updatedAt) {
+      modelingSavedAt.value = data.modeling.updatedAt
+    } else {
+      modelingSavedAt.value = new Date().toISOString()
+    }
+    showToast('建模已绑定到该患者（后端已保存），方案模拟页将自动读取', 'success')
+  } catch (e) {
+    console.error(e)
+    showToast('后端保存建模失败', 'error')
   }
 }
 
@@ -794,6 +970,13 @@ watch(
   },
   { deep: true },
 )
+
+onBeforeUnmount(() => {
+  if (individualizedChart) {
+    individualizedChart.dispose()
+    individualizedChart = null
+  }
+})
 </script>
 
 <style scoped>
@@ -836,6 +1019,96 @@ watch(
   margin-bottom: 14px;
   border-bottom: 2px solid #667eea;
   padding-bottom: 6px;
+}
+.modeling-card .subsection-title {
+  margin-top: 12px;
+}
+.modeling-intro {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.modeling-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #334155;
+  margin-bottom: 8px;
+}
+.modeling-summary .warn {
+  color: #b45309;
+}
+.modeling-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.modeling-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.modeling-group .mg-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #667eea;
+}
+.modeling-group input {
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.modeling-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.btn-modeling {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-modeling.primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border: none;
+}
+.btn-modeling:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.modeling-saved {
+  font-size: 12px;
+  color: #059669;
+  margin-top: 6px;
+}
+.modeling-chart-wrap {
+  margin-top: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px;
+  background: #fff;
+}
+.modeling-chart {
+  width: 100%;
+  height: 260px;
+}
+.modeling-result {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #1e293b;
 }
 .patient-selector {
   display: flex;
@@ -978,50 +1251,15 @@ watch(
   color: #667eea;
   margin-bottom: 10px;
 }
-.record-form {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr 0.8fr auto;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.record-list {
-  border-top: 1px dashed rgba(0, 0, 0, 0.08);
-  padding-top: 8px;
-  max-height: 190px;
-  overflow: auto;
-}
-.record-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 0;
-  font-size: 12px;
-  border-bottom: 1px dashed rgba(0, 0, 0, 0.06);
-}
-.record-empty {
-  font-size: 12px;
-  color: rgba(31, 35, 64, 0.6);
-  padding: 8px 0;
-}
-.usage-json {
-  width: 100%;
-  min-height: 78px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 8px;
-  font-family: Consolas, monospace;
-  font-size: 12px;
-}
 @media (max-width: 1024px) {
   .main {
     grid-template-columns: 1fr;
   }
-  .record-form {
-    grid-template-columns: 1fr;
-  }
   .import-row {
     flex-wrap: wrap;
+  }
+  .modeling-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -56,6 +56,7 @@ const goProfile = () => {
 const logout = () => {
   localStorage.removeItem('pd_token')
   localStorage.removeItem('pd_username')
+  localStorage.removeItem('pd_user_id')
   router.push('/login')
 }
 </script>

@@ -122,11 +122,29 @@ def _patient_visibility_filter(user: User):
         db.session.query(DoctorPatientAccessGrant.owner_doctor_id).filter(grant_scope)
     )
     merged_scope = or_(base, owner_granted)
+    # 共享条件分两层：
+    # 1) 患者级共享：patient.is_shared = True
+    # 2) 医生级共享：owner.allow_share_patients = True（等价于“该医生名下患者默认院内可见”）
+    # 组织范围优先按 hospital_id（新结构），再兼容 org（旧结构）
+    owner_share_user_ids = db.session.query(User.id).filter(User.allow_share_patients.is_(True))
+    patient_or_owner_shared = or_(
+        Patient.is_shared.is_(True),
+        Patient.owner_user_id.in_(owner_share_user_ids),
+    )
+
+    if user.hospital_id:
+        same_hospital_owner_ids = db.session.query(User.id).filter(User.hospital_id == user.hospital_id)
+        return or_(
+            merged_scope,
+            and_(patient_or_owner_shared, Patient.owner_user_id.in_(same_hospital_owner_ids)),
+        )
+
     if user.org:
-        # 仅共享标记为 True 的患者对同机构开放；
-        # 对于历史数据，owner_org 为空但 is_shared=True 的，也允许同机构医生看到。
-        shared_scope = or_(Patient.owner_org == user.org, Patient.owner_org.is_(None))
-        return or_(merged_scope, Patient.is_shared.is_(True) & shared_scope)
+        # 仅当患者归属机构与当前用户 org 字符串完全一致时才允许“院内共享”匹配；
+        # 不再把 owner_org IS NULL 纳入共享范围，否则历史数据会被任意同 org 账号扫到。
+        shared_scope = Patient.owner_org == user.org
+        return or_(merged_scope, and_(patient_or_owner_shared, shared_scope))
+
     return merged_scope
 
 # ==================== 异常输出（打印 Traceback）====================
@@ -213,9 +231,10 @@ def auth_me():
 def update_me_settings():
     """
     更新当前用户的一些设置：
-    - org: 所在医院/科室（兼容旧字段）
+    - display_name: 展示姓名（与个人资料页「姓名」对应）
+    - org: 所在医院/科室（兼容旧字段）；用于患者 owner_org 及共享范围匹配
     - hospital_id / medical_group_id: 新 ER 结构
-    - allow_share_patients: 是否允许自己的患者对同机构医生可见
+    - allow_share_patients: 设为 false 时，同时将该医生名下所有患者的 is_shared 置为 false
     """
     user: User = request.current_user  # type: ignore[attr-defined]
     payload = request.get_json(silent=True) or {}
@@ -230,7 +249,16 @@ def update_me_settings():
             group_id = payload.get('medical_group_id')
             user.medical_group_id = int(group_id) if group_id else None
         if 'allow_share_patients' in payload:
-            user.allow_share_patients = bool(payload.get('allow_share_patients'))
+            allow_share = bool(payload.get('allow_share_patients'))
+            user.allow_share_patients = allow_share
+            if not allow_share:
+                Patient.query.filter(Patient.owner_user_id == user.id).update(
+                    {Patient.is_shared: False},
+                    synchronize_session=False,
+                )
+        if 'display_name' in payload:
+            dn = (payload.get('display_name') or '').strip()
+            user.display_name = dn or None
         db.session.commit()
         return jsonify({'success': True, 'user': user.to_dict()})
     except Exception as e:
@@ -1206,6 +1234,77 @@ def delete_patient(patient_id):
         return jsonify({'success': False, 'error': str(e)}), 400
 
 
+@app.route('/api/patients/<int:patient_id>/individualized-modeling', methods=['GET'])
+@auth_required
+def get_patient_individualized_modeling(patient_id: int):
+    """获取患者绑定的个体化建模数据"""
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first()
+        if not patient:
+            return jsonify({'success': False, 'error': 'patient not found'}), 404
+        return jsonify({
+            'success': True,
+            'modeling': {
+                'modelingInput': patient.individualized_model_input,
+                'result': patient.individualized_model_result,
+                'updatedAt': patient.individualized_model_updated_at.isoformat() if patient.individualized_model_updated_at else None,
+            }
+        })
+    except Exception as e:
+        return _error_response(e, 500)
+
+
+@app.route('/api/patients/<int:patient_id>/individualized-modeling', methods=['PUT'])
+@auth_required
+def upsert_patient_individualized_modeling(patient_id: int):
+    """保存患者绑定的个体化建模数据"""
+    try:
+        user: User = request.current_user  # type: ignore[attr-defined]
+        patient = Patient.query.filter(
+            Patient.id == patient_id, _patient_visibility_filter(user)
+        ).first()
+        if not patient:
+            return jsonify({'success': False, 'error': 'patient not found'}), 404
+
+        data = request.get_json(silent=True) or {}
+        modeling_input = data.get('modelingInput')
+        result = data.get('result')
+        if not isinstance(modeling_input, dict) or not isinstance(result, dict):
+            return jsonify({'success': False, 'error': 'modelingInput and result are required objects'}), 400
+
+        patient.individualized_model_input = modeling_input
+        patient.individualized_model_result = result
+        patient.individualized_model_updated_at = datetime.utcnow()
+
+        # 同步主患者字段，方便旧流程和其他页面直接读取
+        transport_type = result.get('transport_type')
+        if transport_type:
+            patient.peritoneal_transport = str(transport_type)
+        urine_24h = modeling_input.get('urine_24h') or {}
+        urine_volume_24h_ml = urine_24h.get('urine_volume_24h_ml')
+        if urine_volume_24h_ml is not None:
+            try:
+                patient.urine_volume = float(urine_volume_24h_ml)
+            except (TypeError, ValueError):
+                pass
+
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'modeling': {
+                'modelingInput': patient.individualized_model_input,
+                'result': patient.individualized_model_result,
+                'updatedAt': patient.individualized_model_updated_at.isoformat() if patient.individualized_model_updated_at else None,
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        return _error_response(e, 500)
+
+
 @app.route('/api/patients/<int:patient_id>/biochemistry', methods=['GET'])
 @auth_required
 def get_patient_biochemistry(patient_id: int):
@@ -1869,7 +1968,13 @@ def individualized_modeling():
         blood_2h = data.get('blood_2h', {}) or {}
         urine_24h = data.get('urine_24h', {}) or {}
 
-        transport_type = simulator.classify_transport_from_pet(pet)
+        # 分类用 2h 血浆肌酐：兼容前端只传 blood_2h、不传 pet.p2 的情况
+        pet_for_class = copy.deepcopy(pet)
+        p2_block = dict(pet_for_class.get('p2') or {})
+        if not p2_block.get('creatinine') and blood_2h.get('creatinine') is not None:
+            p2_block['creatinine'] = blood_2h.get('creatinine')
+        pet_for_class['p2'] = p2_block
+        transport_type = simulator.classify_transport_from_pet(pet_for_class)
         renal = simulator.estimate_residual_renal_metrics(
             {
                 'urine_24h_ml': urine_24h.get('urine_volume_24h_ml', urine_24h.get('volume_ml', 0)),
@@ -2215,7 +2320,15 @@ def _read_table_rows(upload_file) -> List[Dict[str, Any]]:
     if not raw:
         return []
     if filename.endswith('.xlsx') or filename.endswith('.xls'):
-        df = pd.read_excel(io.BytesIO(raw))
+        xbuf = io.BytesIO(raw)
+        df = pd.read_excel(xbuf)
+        cols = [str(c).strip() for c in list(df.columns)]
+        unnamed_count = len([c for c in cols if c.lower().startswith('unnamed:')])
+        has_core_cols = any(c in ('name', '姓名', 'his号', '性别', '年龄') for c in cols)
+        # 兼容 PET 表：第1行是说明，第2行才是列名
+        if (not has_core_cols) and cols and (unnamed_count / max(len(cols), 1) > 0.4):
+            xbuf.seek(0)
+            df = pd.read_excel(xbuf, header=1)
     else:
         df = pd.read_csv(io.BytesIO(raw))
     rows = df.to_dict(orient='records')
@@ -2246,26 +2359,48 @@ def _parse_tabular_rows(entity: str, rows: List[Dict[str, Any]], current_user: U
         try:
             if entity == 'patients':
                 name = _pick(row, 'name', '姓名')
+                his_no = _pick(row, 'his号', 'HIS号', 'his', '病案号', '住院号')
+                gender_raw = str(_pick(row, 'gender', '性别') or '').strip()
+                if gender_raw in ('男', 'male', 'M', 'm'):
+                    gender_value = 'male'
+                elif gender_raw in ('女', 'female', 'F', 'f'):
+                    gender_value = 'female'
+                else:
+                    gender_value = None
+
+                # PET 表“身高（m）”常见实际值为 158/173（cm），兼容两种填法
+                height_raw = _to_float(_pick(row, 'height', '身高', '身高（m）'))
+                if height_raw is not None:
+                    if height_raw <= 3:
+                        height_value = round(height_raw * 100, 1)
+                    else:
+                        height_value = height_raw
+                else:
+                    height_value = None
+
                 if not name:
-                    skipped += 1
-                    continue
+                    if his_no:
+                        name = f"HIS-{str(his_no).strip()}"
+                    else:
+                        skipped += 1
+                        continue
                 if dry_run:
                     created += 1
                     continue
                 patient = Patient(
                     name=str(name).strip(),
-                    gender=str(_pick(row, 'gender', '性别') or '').strip() or None,
+                    gender=gender_value,
                     age=_to_int(_pick(row, 'age', '年龄')),
                     weight=_to_float(_pick(row, 'weight', '体重')),
-                    height=_to_float(_pick(row, 'height', '身高')),
-                    bsa=_to_float(_pick(row, 'bsa', '体表面积')),
+                    height=height_value,
+                    bsa=_to_float(_pick(row, 'bsa', '体表面积', 'BSA(㎡)(h+w-60)/100')),
                     dialysis_vintage=_to_int(_pick(row, 'dialysis_vintage', '透析龄')),
                     primary_disease=str(_pick(row, 'primary_disease', '原发病') or '').strip() or None,
                     residual_kidney_function=str(_pick(row, 'residual_kidney_function', '残余肾功能') or '').strip() or None,
                     peritoneal_transport=str(_pick(row, 'peritoneal_transport', '腹膜转运') or '').strip() or None,
                     urine_volume=_to_float(_pick(row, 'urine_volume', '尿量')),
-                    blood_pressure_systolic=_to_float(_pick(row, 'blood_pressure_systolic', '收缩压')),
-                    blood_pressure_diastolic=_to_float(_pick(row, 'blood_pressure_diastolic', '舒张压')),
+                    blood_pressure_systolic=_to_float(_pick(row, 'blood_pressure_systolic', '收缩压', 'SBP')),
+                    blood_pressure_diastolic=_to_float(_pick(row, 'blood_pressure_diastolic', '舒张压', 'DBP')),
                     owner_user_id=current_user.id,
                     owner_org=current_user.org,
                     is_shared=_to_bool(_pick(row, 'is_shared', '是否共享', '共享'), False),
@@ -2422,15 +2557,12 @@ def download_import_template():
 
     if entity == 'patients':
         columns = [
-            'name', 'gender', 'age', 'weight', 'height', 'bsa',
-            'dialysis_vintage', 'primary_disease', 'residual_kidney_function',
-            'peritoneal_transport', 'urine_volume', 'blood_pressure_systolic',
-            'blood_pressure_diastolic', 'is_shared'
+            '姓名', 'his号', '性别', '年龄', '身高（m）', '体重',
+            'BSA(㎡)(h+w-60)/100', 'SBP', 'DBP', '原发病', 'PET收集日期', '是否共享'
         ]
         sample = [[
-            '张三', 'male', 52, 63.5, 168, 1.72,
-            24, 'diabetic_nephropathy', 'minimal', 'high_average',
-            600, 145, 88, True
+            '张三', '0003589239', '女', 37, 158, 53,
+            1.51, 135, 99, '慢性肾小球肾炎', '2024-01-02', True
         ]]
     else:
         columns = [
@@ -2462,6 +2594,8 @@ def download_import_template():
     if ws is None:
         raise RuntimeError('failed to create worksheet')
     ws.title = 'template'
+    if entity == 'patients':
+        ws.append(['注：可按PET登记表格式填写，系统支持第1行说明、第2行表头'])
     ws.append(columns)
     for row in sample:
         ws.append(row)

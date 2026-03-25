@@ -2,7 +2,7 @@
   <div class="page">
     <div class="header">
       <div class="title">用户基本信息</div>
-      <div class="subtitle">先做前端保存，占位后续可接后端用户系统</div>
+      <div class="subtitle">机构与共享设置会同步到后端；换账号后各自独立保存。</div>
     </div>
 
     <div class="card">
@@ -59,25 +59,54 @@
 import { onMounted, reactive, ref } from 'vue'
 import { showToast } from '../utils/toast'
 
-const KEY = 'pd_user_profile'
+const LEGACY_KEY = 'pd_user_profile'
 const API_BASE = 'http://localhost:5000/api'
 const hospitals = ref([])
 const groups = ref([])
 
-const load = () => {
-  try {
-    const raw = localStorage.getItem(KEY)
-    const base = { name: '', org: '', phone: '', note: '', allowSharePatients: false, hospitalId: 0, medicalGroupId: 0 }
-    return raw ? Object.assign(base, JSON.parse(raw)) : base
-  } catch {
-    return { name: '', org: '', phone: '', note: '', allowSharePatients: false, hospitalId: 0, medicalGroupId: 0 }
-  }
+const baseProfile = () => ({
+  name: '',
+  org: '',
+  phone: '',
+  note: '',
+  allowSharePatients: false,
+  hospitalId: 0,
+  medicalGroupId: 0,
+})
+
+const profileStorageKey = () => {
+  const uid = localStorage.getItem('pd_user_id') || 'anon'
+  return `${LEGACY_KEY}_${uid}`
 }
 
-const profile = reactive(load())
+const load = () => {
+  const base = baseProfile()
+  const key = profileStorageKey()
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw) return Object.assign(base, JSON.parse(raw))
+    // 仅从旧全局 key 迁移一次到当前账号（避免换账号沿用上一人资料）
+    const legacy = localStorage.getItem(LEGACY_KEY)
+    if (legacy) {
+      const parsed = Object.assign(base, JSON.parse(legacy))
+      localStorage.setItem(key, JSON.stringify(parsed))
+      return parsed
+    }
+  } catch {
+    /* ignore */
+  }
+  return base
+}
+
+const profile = reactive(baseProfile())
 
 const persistLocal = () => {
-  localStorage.setItem(KEY, JSON.stringify(profile))
+  try {
+    localStorage.setItem(profileStorageKey(), JSON.stringify(profile))
+    if (localStorage.getItem(LEGACY_KEY)) localStorage.removeItem(LEGACY_KEY)
+  } catch (e) {
+    console.error(e)
+  }
 }
 
 const authHeaders = () => {
@@ -127,6 +156,7 @@ const save = async () => {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
+          display_name: profile.name || null,
           org: profile.org,
           hospital_id: profile.hospitalId || null,
           medical_group_id: profile.medicalGroupId || null,
@@ -148,10 +178,48 @@ const reset = () => {
   profile.phone = next.phone
   profile.note = next.note
   profile.allowSharePatients = !!next.allowSharePatients
+  profile.hospitalId = next.hospitalId || 0
+  profile.medicalGroupId = next.medicalGroupId || 0
+}
+
+const applyServerUser = (user) => {
+  if (!user) return
+  if (user.display_name != null) profile.name = user.display_name || ''
+  if (user.org != null) profile.org = user.org || ''
+  profile.allowSharePatients = !!user.allow_share_patients
+  profile.hospitalId = user.hospital_id || 0
+  profile.medicalGroupId = user.medical_group_id || 0
+}
+
+const syncFromServer = async () => {
+  const token = localStorage.getItem('pd_token')
+  if (!token) return false
+  try {
+    const resp = await fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    const data = await resp.json().catch(() => ({}))
+    if (data.success && data.user) {
+      if (data.user.id != null) localStorage.setItem('pd_user_id', String(data.user.id))
+      applyServerUser(data.user)
+      persistLocal()
+      return true
+    }
+  } catch (e) {
+    console.error(e)
+  }
+  return false
 }
 
 onMounted(async () => {
   await loadHospitals()
+  const ok = await syncFromServer()
+  if (!ok) {
+    Object.assign(profile, load())
+  } else {
+    const local = load()
+    profile.phone = local.phone || profile.phone
+    profile.note = local.note || profile.note
+    persistLocal()
+  }
   if (profile.hospitalId) {
     await loadGroups(profile.hospitalId)
   }
