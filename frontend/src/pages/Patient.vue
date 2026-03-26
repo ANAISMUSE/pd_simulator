@@ -163,20 +163,29 @@
           <div class="modeling-grid">
             <div class="modeling-group">
               <div class="mg-title">0 小时</div>
+              <div class="mg-label">肌酐</div>
               <input v-model.number="modelingInput.pet.d0.creatinine" type="number" placeholder="肌酐" />
+              <div class="mg-label">葡萄糖</div>
               <input v-model.number="modelingInput.pet.d0.glucose" type="number" placeholder="葡萄糖" />
+              <div class="mg-label">尿素</div>
               <input v-model.number="modelingInput.pet.d0.urea" type="number" placeholder="尿素" />
             </div>
             <div class="modeling-group">
               <div class="mg-title">2 小时</div>
+              <div class="mg-label">肌酐</div>
               <input v-model.number="modelingInput.pet.d2.creatinine" type="number" placeholder="肌酐" />
+              <div class="mg-label">葡萄糖</div>
               <input v-model.number="modelingInput.pet.d2.glucose" type="number" placeholder="葡萄糖" />
+              <div class="mg-label">尿素</div>
               <input v-model.number="modelingInput.pet.d2.urea" type="number" placeholder="尿素" />
             </div>
             <div class="modeling-group">
               <div class="mg-title">4 小时</div>
+              <div class="mg-label">肌酐</div>
               <input v-model.number="modelingInput.pet.d4.creatinine" type="number" placeholder="肌酐" />
+              <div class="mg-label">葡萄糖</div>
               <input v-model.number="modelingInput.pet.d4.glucose" type="number" placeholder="葡萄糖" />
+              <div class="mg-label">尿素</div>
               <input v-model.number="modelingInput.pet.d4.urea" type="number" placeholder="尿素" />
             </div>
           </div>
@@ -383,6 +392,7 @@
 import { ref, watch, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { showToast } from '../utils/toast'
+import { confirm } from '../utils/confirm'
 import {
   defaultModelingInput,
   loadModelingForPatient,
@@ -729,7 +739,7 @@ const savePatient = async () => {
 
 const deletePatient = async () => {
   if (!selectedPatientId.value) return
-  if (!window.confirm('确定要删除这个患者吗？')) return
+  if (!(await confirm('确定要删除这个患者吗？', { title: '删除确认' }))) return
 
   try {
     const token = localStorage.getItem('pd_token') || ''
@@ -1058,6 +1068,12 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 800;
   color: #667eea;
+}
+.modeling-group .mg-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(31, 35, 64, 0.7);
+  margin-top: -2px;
 }
 .modeling-group input {
   padding: 8px 10px;

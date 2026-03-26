@@ -56,7 +56,10 @@ const doRegister = async () => {
     }
     localStorage.setItem('pd_token', data.token)
     localStorage.setItem('pd_username', data.user?.username || username.value)
+    localStorage.setItem('pd_display_name', data.user?.display_name || data.user?.username || username.value)
+    localStorage.setItem('pd_avatar_url', data.user?.avatar_url || '')
     if (data.user?.id != null) localStorage.setItem('pd_user_id', String(data.user.id))
+    window.dispatchEvent(new CustomEvent('pd-user-updated'))
     router.push('/app/user')
   } catch (e) {
     console.error(e)

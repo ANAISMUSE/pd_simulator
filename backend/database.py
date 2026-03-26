@@ -16,6 +16,7 @@ class User(db.Model):
     medical_group_id = db.Column(db.Integer, db.ForeignKey('medical_groups.id'))
     role = db.Column(db.String(32), default='doctor')
     org = db.Column(db.String(120))  # 医院/科室/机构
+    avatar_url = db.Column(db.Text)  # 医生头像（支持 data URL）
     allow_share_patients = db.Column(db.Boolean, default=False)  # 是否同意与本机构医生共享患者
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -28,6 +29,7 @@ class User(db.Model):
             'medical_group_id': self.medical_group_id,
             'role': self.role,
             'org': self.org,
+            'avatar_url': self.avatar_url,
             'allow_share_patients': bool(self.allow_share_patients),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
@@ -491,6 +493,8 @@ def apply_schema_migrations(app):
             alterations.append("ALTER TABLE users ADD COLUMN medical_group_id INTEGER REFERENCES medical_groups(id)")
         if not _column_exists(inspector, 'users', 'role'):
             alterations.append("ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'doctor'")
+        if not _column_exists(inspector, 'users', 'avatar_url'):
+            alterations.append("ALTER TABLE users ADD COLUMN avatar_url TEXT")
 
         # Patient 表新增归属医生、机构与共享标志
         if not _column_exists(inspector, 'patients', 'owner_user_id'):

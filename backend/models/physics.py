@@ -156,7 +156,12 @@ class PhysicsCalculator:
         C_mean = (C_P + C_D) / 2.0
         
         # 扩散项
-        diffusive = solute.ps_product * (C_P - C_D)
+        # 单位检查：
+        # - ps_product: mL/min
+        # - (C_P - C_D): mmol/L
+        # => (mL/min)*(mmol/L) = mmol/min * (mL/L) = mmol/min * (1/1000)
+        # 因此需要除以 1000，把 L<->mL 口径对齐
+        diffusive = solute.ps_product * (C_P - C_D) / 1000.0
         
         # 对流项
         convective = (1.0 - solute.reflection_coef_small) * J_v_S * C_mean / 1000.0

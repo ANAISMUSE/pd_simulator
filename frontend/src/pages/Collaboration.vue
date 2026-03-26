@@ -89,15 +89,50 @@
           <button class="btn" @click="submitRequest">发起申请</button>
         </div>
         <div class="list">
+          <div class="list-title">我发起的申请</div>
+          <div v-for="r in sentRequests" :key="`sent-${r.id}`" class="list-item">
+            <span>#{{ r.id }} 目标医生 {{ r.owner_doctor_id }}（{{ r.status }}）</span>
+          </div>
+          <div v-if="!sentRequests.length" class="list-empty">暂无你发起的申请</div>
+        </div>
+        <div class="list">
+          <div class="list-title">当前授权有效期说明：默认 30 天，填 0 为长期授权</div>
           <div class="list-title">我收到的申请</div>
           <div v-for="r in receivedRequests" :key="r.id" class="list-item">
             <span>#{{ r.id }} 来自医生 {{ r.requester_doctor_id }}（{{ r.status }}）</span>
             <div class="item-actions" v-if="r.status === 'pending'">
-              <input v-model.number="approveDays" class="days" type="number" min="0" placeholder="授权天数(0=长期)" />
-              <button class="btn ghost" @click="decideRequest(r.id, 'approve')">同意</button>
+              <input
+                v-model.number="approveDaysByRequest[r.id]"
+                class="days"
+                type="number"
+                min="0"
+                placeholder="授权天数(0=长期)"
+              />
+              <button class="btn ghost" @click="decideRequest(r.id, 'approve')">同意并授权</button>
               <button class="btn ghost" @click="decideRequest(r.id, 'reject')">拒绝</button>
             </div>
           </div>
+        </div>
+        <div class="list">
+          <div class="list-title">我授予他人的访问权限（可撤销）</div>
+          <div v-for="g in ownerGrants" :key="`owner-${g.id}`" class="list-item">
+            <span>
+              授权给医生 {{ g.grantee_doctor_id }} · {{ grantStatusText(g) }} · {{ grantExpireText(g) }}
+            </span>
+            <div class="item-actions">
+              <button class="btn ghost" :disabled="!g.active" @click="revokeGrant(g.id)">撤销访问权</button>
+            </div>
+          </div>
+          <div v-if="!ownerGrants.length" class="list-empty">暂无你发出的授权</div>
+        </div>
+        <div class="list">
+          <div class="list-title">我获得的访问权限</div>
+          <div v-for="g in granteeGrants" :key="`grantee-${g.id}`" class="list-item">
+            <span>
+              来自医生 {{ g.owner_doctor_id }} · {{ grantStatusText(g) }} · {{ grantExpireText(g) }}
+            </span>
+          </div>
+          <div v-if="!granteeGrants.length" class="list-empty">暂无你收到的授权</div>
         </div>
       </section>
 
@@ -149,8 +184,9 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { showToast } from '../utils/toast'
+import { confirm } from '../utils/confirm'
 
 const API_BASE = 'http://localhost:5000/api'
 const token = () => localStorage.getItem('pd_token') || ''
@@ -165,6 +201,8 @@ const regimens = ref([])
 const checks = ref([])
 const usages = ref([])
 const receivedRequests = ref([])
+const sentRequests = ref([])
+const accessGrants = ref([])
 
 const newHospitalName = ref('')
 const groupHospitalId = ref(0)
@@ -174,7 +212,8 @@ const requestDoctorId = ref(0)
 const requestReason = ref('')
 const doctorFilterHospitalId = ref(0)
 const doctorFilterGroupId = ref(0)
-const approveDays = ref(0)
+const approveDays = ref(30)
+const approveDaysByRequest = ref({})
 
 const selectedPatientId = ref(0)
 const checkForm = ref({ project_name: '', result_value: '', unit: '' })
@@ -218,16 +257,25 @@ const requestJson = async (url, options = {}, fallback = '请求失败') => {
 }
 
 const loadBase = async () => {
-  const [h, p, r, req] = await Promise.all([
+  const [h, p, r, reqReceived, reqSent, grants] = await Promise.all([
     fetch(`${API_BASE}/hospitals`, { headers: authHeaders() }).then(safeJson),
     fetch(`${API_BASE}/patients`, { headers: authHeaders() }).then(safeJson),
     fetch(`${API_BASE}/regimens`).then(safeJson),
     fetch(`${API_BASE}/access-requests?mode=received`, { headers: authHeaders() }).then(safeJson),
+    fetch(`${API_BASE}/access-requests?mode=sent`, { headers: authHeaders() }).then(safeJson),
+    fetch(`${API_BASE}/access-grants`, { headers: authHeaders() }).then(safeJson),
   ])
   hospitals.value = h.hospitals || []
   patients.value = p.patients || []
   regimens.value = r.regimens || []
-  receivedRequests.value = req.requests || []
+  receivedRequests.value = reqReceived.requests || []
+  sentRequests.value = reqSent.requests || []
+  accessGrants.value = grants.grants || []
+  const nextApproveDaysByRequest = {}
+  for (const r of receivedRequests.value) {
+    if (r.status === 'pending') nextApproveDaysByRequest[r.id] = 30
+  }
+  approveDaysByRequest.value = nextApproveDaysByRequest
   if (!doctorFilterHospitalId.value && hospitals.value.length) {
     doctorFilterHospitalId.value = hospitals.value[0].id
   }
@@ -317,15 +365,56 @@ const submitRequest = async () => {
 }
 
 const decideRequest = async (id, action) => {
+  const days = Number(approveDaysByRequest.value[id] ?? approveDays.value ?? 30)
+  if (action === 'approve' && (Number.isNaN(days) || days < 0)) {
+    return showToast('授权天数必须 >= 0', 'info')
+  }
   const resp = await fetch(`${API_BASE}/access-requests/${id}/decision`, {
     method: 'POST',
     headers: jsonHeaders(),
-    body: JSON.stringify({ action, expires_days: approveDays.value }),
+    body: JSON.stringify({ action, expires_days: action === 'approve' ? days : undefined }),
   })
   const data = await safeJson(resp)
   if (!data.success) return showToast(data.error || '审批失败', 'error')
   await loadBase()
   showToast(`已${action === 'approve' ? '同意' : '拒绝'}申请`, 'success')
+}
+
+const currentUserId = () => Number(localStorage.getItem('pd_user_id') || 0)
+
+const ownerGrants = computed(() => {
+  const uid = currentUserId()
+  return (accessGrants.value || []).filter((g) => Number(g.owner_doctor_id) === uid)
+})
+
+const granteeGrants = computed(() => {
+  const uid = currentUserId()
+  return (accessGrants.value || []).filter((g) => Number(g.grantee_doctor_id) === uid)
+})
+
+const grantStatusText = (grant) => {
+  if (!grant?.active) return '已撤销'
+  if (grant?.expires_at && new Date(grant.expires_at).getTime() <= Date.now()) return '已过期'
+  return '生效中'
+}
+
+const grantExpireText = (grant) => {
+  if (!grant?.expires_at) return '长期'
+  const dt = new Date(grant.expires_at)
+  if (Number.isNaN(dt.getTime())) return '到期时间无效'
+  return `到期：${dt.toLocaleString('zh-CN')}`
+}
+
+const revokeGrant = async (grantId) => {
+  if (!(await confirm('确认撤销该医生对你名下患者的访问权吗？', { title: '撤销确认' }))) return
+  const resp = await fetch(`${API_BASE}/access-grants/${grantId}/revoke`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+  })
+  const data = await safeJson(resp)
+  if (!data.success) return showToast(data.error || '撤销授权失败', 'error')
+  await loadBase()
+  showToast('访问权已撤销', 'success')
 }
 
 const loadPatientRecords = async () => {
@@ -495,6 +584,7 @@ onMounted(loadBase)
 .list-title { font-size: 12px; color: #475569; margin-bottom: 6px; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.06); }
 .item-actions { display: flex; gap: 6px; }
+.list-empty { font-size: 12px; color: #64748b; padding: 6px 0; }
 .days { width: 130px; flex: 0 0 130px !important; }
 .json { width: 100%; min-height: 80px; margin-bottom: 8px; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; font-family: Consolas, monospace; font-size: 12px; }
 .error-preview { margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(0,0,0,0.08); }

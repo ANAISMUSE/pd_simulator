@@ -245,31 +245,80 @@
         <div class="research-block">
           <h3>1) 单次腹透模拟</h3>
           <div class="mini-grid">
-            <select v-model="singleInput.solution_type">
-              <option value="glucose">葡萄糖</option>
-              <option value="amino_acid">氨基酸</option>
-              <option value="icodextrin">艾考糊精</option>
-            </select>
-            <input v-model.number="singleInput.concentration_pct" type="number" step="0.1" placeholder="浓度(%)" />
-            <input v-model.number="singleInput.fill_volume_l" type="number" step="0.1" placeholder="灌注量(L)" />
-            <input v-model.number="singleInput.dwell_minutes" type="number" placeholder="留腹时间(分钟)" />
-            <input v-model.number="singleInput.drain_minutes" type="number" placeholder="引流时间(分钟)" />
+            <div class="mini-field">
+              <div class="mini-label">腹透液类型</div>
+              <select v-model="singleInput.solution_type">
+                <option value="glucose">葡萄糖</option>
+                <option value="amino_acid">氨基酸</option>
+                <option value="icodextrin">艾考糊精</option>
+              </select>
+            </div>
+            <div class="mini-field">
+              <div class="mini-label">浓度(%)</div>
+              <input v-model.number="singleInput.concentration_pct" type="number" step="0.1" placeholder="浓度(%)" />
+            </div>
+            <div class="mini-field">
+              <div class="mini-label">灌注量(L)</div>
+              <input v-model.number="singleInput.fill_volume_l" type="number" step="0.1" placeholder="灌注量(L)" />
+            </div>
+            <div class="mini-field">
+              <div class="mini-label">留腹时间(分钟)</div>
+              <input v-model.number="singleInput.dwell_minutes" type="number" placeholder="留腹时间(分钟)" />
+            </div>
+            <div class="mini-field">
+              <div class="mini-label">引流时间(分钟)</div>
+              <input v-model.number="singleInput.drain_minutes" type="number" placeholder="引流时间(分钟)" />
+            </div>
           </div>
           <button class="btn-primary" @click="runSingleExchange">运行单次模拟</button>
           <div v-if="singleResult?.time_series" class="research-chart-wrap">
             <div ref="singleChartEl" class="research-chart"></div>
           </div>
           <div v-if="singleResult?.summary" class="research-result">
-            <div>尿素清除：{{ singleResult.summary.urea_clearance }}</div>
-            <div>β2M清除：{{ singleResult.summary.beta2m_clearance }}</div>
-            <div>小孔超滤：{{ singleResult.summary.uf_small_pore }}</div>
-            <div>超小孔超滤：{{ singleResult.summary.uf_ultrasmall_pore }}</div>
+            <div class="research-metrics-grid">
+              <div class="research-metric-card">
+                <div class="research-metric-label">腹腔 Kt/V</div>
+                <div class="research-metric-value">{{ singleResult.summary.peritoneal_ktv }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">总超滤</div>
+                <div class="research-metric-value">{{ singleResult.summary.uf_total }}</div>
+                <div class="research-metric-sub">mL（模型值）</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">尿素清除</div>
+                <div class="research-metric-value">{{ singleResult.summary.urea_clearance }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">肌酐清除</div>
+                <div class="research-metric-value">{{ singleResult.summary.creatinine_clearance }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">β2M清除</div>
+                <div class="research-metric-value">{{ singleResult.summary.beta2m_clearance }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">超滤分型</div>
+                <div class="research-metric-value">
+                  {{ singleResult.summary.uf_small_pore }} / {{ singleResult.summary.uf_ultrasmall_pore }}
+                </div>
+                <div class="research-metric-sub">小孔 / 超小孔（mL）</div>
+              </div>
+            </div>
           </div>
         </div>
 
         <div class="research-block">
           <h3>2) 24小时连续透析</h3>
           <div class="cycle-list">
+            <div class="cycle-item cycle-header" aria-hidden="true">
+              <span class="cycle-title">循环</span>
+              <span class="cycle-header-label">溶液类型</span>
+              <span class="cycle-header-label">浓度(%)</span>
+              <span class="cycle-header-label">灌注量(L)</span>
+              <span class="cycle-header-label">留腹时间(分钟)</span>
+              <span />
+            </div>
             <div class="cycle-item" v-for="(c, idx) in continuousInput.cycles" :key="idx">
               <span class="cycle-title">循环{{ idx + 1 }}</span>
               <select v-model="c.solution_type">
@@ -284,7 +333,14 @@
             </div>
           </div>
           <div class="cycle-actions">
-            <input v-model.number="continuousInput.drain_minutes" type="number" placeholder="引流时间(分钟)" />
+            <div class="cycle-actions-drain">
+              <div class="cycle-actions-label">引流时间(分钟)</div>
+              <input
+                v-model.number="continuousInput.drain_minutes"
+                type="number"
+                placeholder="引流时间(分钟)"
+              />
+            </div>
             <button class="btn-secondary" @click="addCycle">+ 添加循环</button>
             <button class="btn-primary" @click="runContinuous24h">运行24h模拟</button>
           </div>
@@ -292,11 +348,35 @@
             <div ref="continuousChartEl" class="research-chart"></div>
           </div>
           <div v-if="continuousResult" class="research-result">
-            <div>总腹腔Kt/V：{{ continuousResult.total_peritoneal_ktv }}</div>
-            <div>总Kt/V：{{ continuousResult.total_ktv }}</div>
-            <div>肌酐清除率：{{ continuousResult.creatinine_clearance }}</div>
-            <div>β2M清除：{{ continuousResult.beta2m_clearance }}</div>
-            <div>总超滤：{{ continuousResult.total_uf }}</div>
+            <div class="research-metrics-grid">
+              <div class="research-metric-card">
+                <div class="research-metric-label">总腹腔 Kt/V</div>
+                <div class="research-metric-value">{{ continuousResult.total_peritoneal_ktv }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">总 Kt/V</div>
+                <div class="research-metric-value">{{ continuousResult.total_ktv }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">残余肾 Kt/V</div>
+                <div class="research-metric-value">{{ continuousResult.renal_ktv }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">肌酐清除率</div>
+                <div class="research-metric-value">{{ continuousResult.creatinine_clearance }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">β2M清除</div>
+                <div class="research-metric-value">{{ continuousResult.beta2m_clearance }}</div>
+              </div>
+              <div class="research-metric-card">
+                <div class="research-metric-label">总超滤</div>
+                <div class="research-metric-value">{{ continuousResult.total_uf }}</div>
+                <div class="research-metric-sub">
+                  小孔 / 超小孔：{{ continuousResult.total_uf_small_pore }} / {{ continuousResult.total_uf_ultrasmall_pore }}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -373,12 +453,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
+import { ref, onMounted, nextTick, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
 import { showToast } from '../utils/toast'
+import { confirm } from '../utils/confirm'
 import { loadModelingForPatient, defaultModelingInput } from '../utils/individualizedModelingStorage.js'
 
 const API_BASE = 'http://localhost:5000/api'
+const REGIMEN_SIM_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const regimenSimStateKey = () => `pd_regimen_sim_state_${localStorage.getItem('pd_user_id') || 'anon'}`
 
 const loading = ref(false)
 const presets = ref([])
@@ -439,6 +522,43 @@ const continuousInput = ref({
 })
 const continuousResult = ref(null)
 
+const persistRegimenSimState = () => {
+  try {
+    const payload = {
+      saved_at: Date.now(),
+      selected_patient_id: selectedPatientId.value,
+      selected_presets: selectedPresets.value,
+      single_input: singleInput.value,
+      single_result: singleResult.value,
+      continuous_input: continuousInput.value,
+      continuous_result: continuousResult.value,
+      urine_24h: urine24h.value,
+      current_regimen: currentRegimen.value,
+      simulation_result: simulationResult.value,
+      comparison_results: comparisonResults.value,
+    }
+    localStorage.setItem(regimenSimStateKey(), JSON.stringify(payload))
+  } catch (e) {
+    console.error('保存方案模拟页状态失败', e)
+  }
+}
+
+const restoreRegimenSimState = () => {
+  try {
+    const raw = localStorage.getItem(regimenSimStateKey())
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed?.saved_at || Date.now() - Number(parsed.saved_at) > REGIMEN_SIM_CACHE_TTL_MS) {
+      localStorage.removeItem(regimenSimStateKey())
+      return null
+    }
+    return parsed
+  } catch (e) {
+    console.error('恢复方案模拟页状态失败', e)
+    return null
+  }
+}
+
 const loadPatientPayload = () => {
   // 严格要求：必须在本页上方明确选择一个患者
   if (patientPayload.value?.patient && patientPayload.value?.biomarkers) return patientPayload.value
@@ -450,6 +570,31 @@ onMounted(async () => {
   await loadPresets()
   loadCustomRegimens()
   await reloadPatients()
+  const saved = restoreRegimenSimState()
+  if (saved) {
+    selectedPatientId.value = saved.selected_patient_id || null
+    selectedPresets.value = Array.isArray(saved.selected_presets) ? saved.selected_presets : []
+    singleInput.value = { ...singleInput.value, ...(saved.single_input || {}) }
+    singleResult.value = saved.single_result || null
+    urine24h.value = { ...urine24h.value, ...(saved.urine_24h || {}) }
+    const savedCycles = saved?.continuous_input?.cycles
+    continuousInput.value = {
+      drain_minutes: Number(saved?.continuous_input?.drain_minutes ?? continuousInput.value.drain_minutes),
+      cycles: Array.isArray(savedCycles) && savedCycles.length ? savedCycles : [defaultCycle(), defaultCycle(), defaultCycle()],
+    }
+    continuousResult.value = saved.continuous_result || null
+    currentRegimen.value = saved.current_regimen || {}
+    simulationResult.value = saved.simulation_result || null
+    comparisonResults.value = Array.isArray(saved.comparison_results) ? saved.comparison_results : []
+    if (selectedPatientId.value) {
+      await loadPatientData({ preserveResults: true })
+    }
+    await nextTick()
+    renderMainChart()
+    renderSingleExchangeChart()
+    renderContinuousChart()
+    renderComparisonChart()
+  }
 })
 
 const reloadPatients = async () => {
@@ -464,7 +609,7 @@ const reloadPatients = async () => {
   }
 }
 
-const loadPatientData = async () => {
+const loadPatientData = async ({ preserveResults = false } = {}) => {
   activePatientName.value = ''
   patientPayload.value = null
   if (!selectedPatientId.value) {
@@ -497,6 +642,7 @@ const loadPatientData = async () => {
       storedModel = loadModelingForPatient(selectedPatientId.value)
     }
     const transportFromModel = storedModel?.result?.transport_type
+    const fittedParameters = storedModel?.result?.fitted_parameters || null
     patientPayload.value = {
       patient: {
         name: p.name,
@@ -519,6 +665,7 @@ const loadPatientData = async () => {
         potassium: 4.8,
         sodium: 138
       },
+      fitted_parameters: fittedParameters,
     }
     if (storedModel?.modelingInput?.urine_24h) {
       urine24h.value = {
@@ -538,8 +685,12 @@ const loadPatientData = async () => {
       console.error(e)
     }
     // 切换患者后清空上次模拟结果，避免界面仍显示上一名患者的数据
-    simulationResult.value = null
-    comparisonResults.value = []
+    if (!preserveResults) {
+      simulationResult.value = null
+      comparisonResults.value = []
+      singleResult.value = null
+      continuousResult.value = null
+    }
   } catch (e) {
     console.error(e)
     showToast('加载患者失败', 'error')
@@ -695,6 +846,7 @@ const runSingleExchange = async () => {
       body: JSON.stringify({
         patient: payload.patient,
         biomarkers: payload.biomarkers,
+        fitted_parameters: payload.fitted_parameters,
         ...singleInput.value,
       }),
     })
@@ -732,6 +884,7 @@ const runContinuous24h = async () => {
       body: JSON.stringify({
         patient: payload.patient,
         biomarkers: payload.biomarkers,
+        fitted_parameters: payload.fitted_parameters,
         drain_minutes: continuousInput.value.drain_minutes,
         cycles: continuousInput.value.cycles,
         urine_24h: urine24h.value,
@@ -841,8 +994,8 @@ const renderContinuousChart = () => {
   )
 }
 
-const deleteCustomRegimen = (id) => {
-  if (!window.confirm('确定要删除这个方案吗？')) return
+const deleteCustomRegimen = async (id) => {
+  if (!(await confirm('确定要删除这个方案吗？', { title: '删除确认' }))) return
   customRegimens.value = customRegimens.value.filter((r) => r.id !== id)
   persistCustomRegimens()
   selectedPresets.value = selectedPresets.value.filter((p) => p !== `custom_${id}`)
@@ -1178,6 +1331,25 @@ onBeforeUnmount(() => {
     continuousChart = null
   }
 })
+
+watch(
+  [
+    selectedPatientId,
+    selectedPresets,
+    singleInput,
+    singleResult,
+    continuousInput,
+    continuousResult,
+    urine24h,
+    currentRegimen,
+    simulationResult,
+    comparisonResults,
+  ],
+  () => {
+    persistRegimenSimState()
+  },
+  { deep: true },
+)
 </script>
 
 <style scoped>
@@ -1538,6 +1710,16 @@ onBeforeUnmount(() => {
   font-size: 12px;
   width: 100%;
 }
+.mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mini-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(31, 35, 64, 0.7);
+}
 .research-result {
   margin-top: 8px;
   font-size: 12px;
@@ -1547,6 +1729,36 @@ onBeforeUnmount(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 8px;
+}
+.research-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.research-metric-card {
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 10px;
+  padding: 10px;
+}
+.research-metric-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(31, 35, 64, 0.7);
+  margin-bottom: 6px;
+}
+.research-metric-value {
+  font-size: 18px;
+  font-weight: 950;
+  color: #1f2937;
+  line-height: 1.1;
+  word-break: break-word;
+}
+.research-metric-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(31, 35, 64, 0.55);
+  line-height: 1.3;
 }
 .research-chart-wrap {
   margin-top: 8px;
@@ -1574,6 +1786,18 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: #475569;
 }
+.cycle-header .cycle-title {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.cycle-header-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.65);
+  text-align: center;
+}
+
 .cycle-item input,
 .cycle-item select {
   border: 1px solid #cbd5e1;
@@ -1586,8 +1810,20 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 6px;
-  align-items: center;
+  align-items: start;
 }
+.cycle-actions-drain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cycle-actions-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.65);
+}
+
 .cycle-actions input {
   border: 1px solid #cbd5e1;
   border-radius: 6px;

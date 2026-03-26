@@ -65,6 +65,10 @@ class ModelParameters:
         
         # ============ 透析液参数 ============
         self.glucose_concentration = 1.5  # 葡萄糖浓度 (%)
+        # Phase2：加入氨基酸/艾考糊精等效渗透溶质（单位：mmol/L）
+        # 对应 wrapper 中将 concentration_pct 转换得到 mmol/L 的结果
+        self.amino_acid_concentration_mmol = 0.0
+        self.icodextrin_concentration_mmol = 0.0
         self.dialysate_sodium = 132.0  # 钠浓度 (mmol/L)
         
         # ============ 淋巴回流 ============
@@ -132,11 +136,34 @@ class ModelParameters:
             'glucose': Solute(
                 name='葡萄糖',
                 molecular_weight=180,
-                reflection_coef_small=0.03,
+                # Phase1 经验校准：降低葡萄糖在小孔通道的反射系数，以避免 UF 过大
+                reflection_coef_small=0.01,
                 reflection_coef_large=0.0,
                 osmotic_coef=1.0,
                 plasma_concentration=5.5,  # mmol/L
                 ps_product=15.8 * ps_scale
+            ),
+            'amino_acid': Solute(
+                name='氨基酸',
+                molecular_weight=150.0,  # mmol/L 口径下仅用于量纲；主要由 wrapper 设置浓度
+                # Phase2 修复：按文献/你的建议提高有效反射系数
+                reflection_coef_small=0.6,
+                reflection_coef_large=0.6,
+                # Phase2 校准：将有效渗透系数 φ 压低，避免氨基酸在当前简化模型下导致 UF 失真爆发
+                osmotic_coef=0.026,
+                plasma_concentration=0.0,  # mmol/L（Phase2：未提供患者血浆氨基酸，先设为 0）
+                ps_product=2.0 * ps_scale,  # 仅用于模型动力学，数值先给合理量级
+            ),
+            'icodextrin': Solute(
+                name='艾考糊精',
+                molecular_weight=15000.0,  # 大分子近似
+                # Phase2 修复：按文献/你的建议接近完全反射
+                reflection_coef_small=0.99,
+                reflection_coef_large=0.99,
+                # Phase2 校准：将有效渗透系数 φ 压低，避免 icodextrin 在当前模型简化假设下造成 UF 过大
+                osmotic_coef=0.35,
+                plasma_concentration=0.0,  # mmol/L（Phase2：未提供患者血浆艾考糊精，先设为 0）
+                ps_product=0.2 * ps_scale,  # 大分子转运慢，PS 先取小值
             ),
             'sodium': Solute(
                 name='钠',
@@ -174,6 +201,8 @@ class ModelParameters:
             'urea': 0.0,
             'creatinine': 0.0,
             'glucose': glucose_mmol,
+            'amino_acid': float(self.amino_acid_concentration_mmol),
+            'icodextrin': float(self.icodextrin_concentration_mmol),
             'sodium': self.dialysate_sodium,
             'beta2m': 0.0,
             'albumin': 0.0

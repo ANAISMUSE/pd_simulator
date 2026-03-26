@@ -45,6 +45,9 @@ from database import (
 from optimizer.genetic import GeneticOptimizer
 from optimizer.objectives import OptimizationObjectives
 from models.parameters import TransportType
+from models.pet_fitting import fit_pet_parameters
+from models.ode_continuous_24h import simulate_continuous_24h_ode
+from models.ode_single_exchange import simulate_single_exchange_ode
 from sqlalchemy import or_, and_  # type: ignore
 
 app = Flask(__name__)
@@ -232,6 +235,7 @@ def update_me_settings():
     """
     更新当前用户的一些设置：
     - display_name: 展示姓名（与个人资料页「姓名」对应）
+    - avatar_url: 医生头像（支持 data URL）
     - org: 所在医院/科室（兼容旧字段）；用于患者 owner_org 及共享范围匹配
     - hospital_id / medical_group_id: 新 ER 结构
     - allow_share_patients: 设为 false 时，同时将该医生名下所有患者的 is_shared 置为 false
@@ -259,6 +263,9 @@ def update_me_settings():
         if 'display_name' in payload:
             dn = (payload.get('display_name') or '').strip()
             user.display_name = dn or None
+        if 'avatar_url' in payload:
+            avatar_url = (payload.get('avatar_url') or '').strip()
+            user.avatar_url = avatar_url or None
         db.session.commit()
         return jsonify({'success': True, 'user': user.to_dict()})
     except Exception as e:
@@ -409,9 +416,11 @@ def decide_access_request(request_id: int):
         user: User = request.current_user  # type: ignore[attr-defined]
         data = request.get_json(silent=True) or {}
         action = (data.get('action') or '').strip().lower()
-        expires_days = int(data.get('expires_days') or 0)
+        expires_days = int(data.get('expires_days', 30) or 0)
         if action not in ('approve', 'reject'):
             return jsonify({'success': False, 'error': 'action must be approve/reject'}), 400
+        if expires_days < 0:
+            return jsonify({'success': False, 'error': 'expires_days must be >= 0'}), 400
         req = DoctorAccessRequest.query.get_or_404(request_id)
         if req.owner_doctor_id != user.id:
             return jsonify({'success': False, 'error': 'no permission'}), 403
@@ -2002,6 +2011,23 @@ def individualized_modeling():
         urine_24h_ml = float(urine_24h.get('urine_volume_24h_ml', urine_24h.get('volume_ml', 0)) or 0)
         residual_intraperitoneal_ml = max(100.0, 350.0 - glucose_drop_ratio * 180.0 + max(0.0, 800 - urine_24h_ml) * 0.03)
 
+        # ===== Phase 3：ODE 拟合 fitted_parameters =====
+        # 将 transport_type 字符串映射到 ODE 的 TransportType 枚举
+        if transport_type == "high":
+            ode_transport = TransportType.FAST
+        elif transport_type in ("high_average", "low_average"):
+            ode_transport = TransportType.AVERAGE
+        else:
+            ode_transport = TransportType.SLOW
+
+        fitted_parameters = fit_pet_parameters(
+            patient=patient,
+            pet=pet,
+            blood_2h=blood_2h,
+            transport_type=ode_transport,
+            max_nfev=10,
+        )
+
         return jsonify({
             'success': True,
             'result': {
@@ -2010,6 +2036,8 @@ def individualized_modeling():
                 'renal_creatinine_clearance_l_day': renal['renal_creatinine_clearance_l_day'],
                 'sodium_sieving_1h': round(float(sodium_sieving_1h), 3),
                 'residual_intraperitoneal_volume_ml': round(float(residual_intraperitoneal_ml), 1),
+                # Phase3 新增：用于后续 single-exchange 的参数覆盖
+                'fitted_parameters': fitted_parameters,
             },
         })
     except Exception as e:
@@ -2027,13 +2055,15 @@ def simulate_single_exchange_api():
         data = request.get_json(silent=True) or {}
         patient = data.get('patient', {}) or {}
         biomarkers = data.get('biomarkers', {}) or {}
+        fitted_parameters = data.get('fitted_parameters', None) or data.get('model_params', None) or None
         solution_type = data.get('solution_type', 'glucose')
         concentration_pct = float(data.get('concentration_pct', data.get('concentration', 1.5)) or 1.5)
         dwell_minutes = float(data.get('dwell_minutes', data.get('dwell_hours', 6) * 60) or 360)
         fill_volume_l = float(data.get('fill_volume_l', data.get('fill_volume', 2.0)) or 2.0)
         drain_minutes = float(data.get('drain_minutes', 7) or 7)
 
-        result = simulator.simulate_single_exchange(
+        # Phase 1：单次腹透改用 ODE 引擎（dwell_only）
+        result = simulate_single_exchange_ode(
             solution_type=solution_type,
             concentration_pct=concentration_pct,
             dwell_minutes=dwell_minutes,
@@ -2041,7 +2071,7 @@ def simulate_single_exchange_api():
             drain_minutes=drain_minutes,
             patient=patient,
             biomarkers=biomarkers,
-            current_time=0.0,
+            fitted_parameters=fitted_parameters,
         )
         return jsonify({'success': True, 'result': result})
     except Exception as e:
@@ -2062,51 +2092,19 @@ def simulate_continuous_24h_api():
         cycles = data.get('cycles', []) or []
         drain_minutes = float(data.get('drain_minutes', 7) or 7)
         urine_24h = data.get('urine_24h', {}) or {}
+        fitted_parameters = data.get('fitted_parameters', None) or None
 
         if not cycles:
             return jsonify({'success': False, 'error': 'cycles required'}), 400
 
-        total_peritoneal_ktv = 0.0
-        total_creatinine_clearance = 0.0
-        total_beta2m_clearance = 0.0
-        total_uf_small = 0.0
-        total_uf_ultrasmall = 0.0
-        current_time = 0.0
-        cycle_results = []
-        ts = {
-            'time_min': [],
-            'volume_l': [],
-            'urea_clearance_rate': [],
-            'beta2m_clearance_rate': [],
-            'uf_rate': [],
-        }
-
-        for idx, c in enumerate(cycles):
-            single = simulator.simulate_single_exchange(
-                solution_type=c.get('solution_type', 'glucose'),
-                concentration_pct=float(c.get('concentration_pct', c.get('concentration', 1.5)) or 1.5),
-                dwell_minutes=float(c.get('dwell_minutes', c.get('dwell_hours', 6) * 60) or 360),
-                fill_volume_l=float(c.get('fill_volume_l', c.get('fill_volume', 2.0)) or 2.0),
-                drain_minutes=drain_minutes,
-                patient=patient,
-                biomarkers=biomarkers,
-                current_time=current_time,
-            )
-            cycle_results.append({'cycle': idx + 1, **single})
-            s = single['summary']
-            total_peritoneal_ktv += float(s.get('peritoneal_ktv', 0))
-            total_creatinine_clearance += float(s.get('creatinine_clearance', 0))
-            total_beta2m_clearance += float(s.get('beta2m_clearance', 0))
-            total_uf_small += float(s.get('uf_small_pore', 0))
-            total_uf_ultrasmall += float(s.get('uf_ultrasmall_pore', 0))
-
-            tss = single.get('time_series', {})
-            ts['time_min'].extend(tss.get('time_min', []))
-            ts['volume_l'].extend(tss.get('volume_l', []))
-            ts['urea_clearance_rate'].extend(tss.get('urea_clearance_rate', []))
-            ts['beta2m_clearance_rate'].extend(tss.get('beta2m_clearance_rate', []))
-            ts['uf_rate'].extend(tss.get('uf_rate', []))
-            current_time += float(single.get('duration_total_min', 0))
+        # Phase2+3：用 ODE dwell-only 连续模拟替换简化公式引擎
+        ode_results = simulate_continuous_24h_ode(
+            patient=patient,
+            biomarkers=biomarkers,
+            cycles=cycles,
+            drain_minutes=drain_minutes,
+            fitted_parameters=fitted_parameters,
+        )
 
         renal = simulator.estimate_residual_renal_metrics(
             {
@@ -2121,23 +2119,23 @@ def simulate_continuous_24h_api():
             },
         )
 
-        total_ktv = total_peritoneal_ktv + float(renal.get('renal_ktv', 0))
+        total_ktv = float(ode_results.get('total_peritoneal_ktv', 0.0) or 0.0) + float(renal.get('renal_ktv', 0.0) or 0.0)
 
         return jsonify({
             'success': True,
             'result': {
-                'total_peritoneal_ktv': round(total_peritoneal_ktv, 4),
+                'total_peritoneal_ktv': round(float(ode_results.get('total_peritoneal_ktv', 0.0) or 0.0), 4),
                 'total_ktv': round(total_ktv, 4),
-                'creatinine_clearance': round(total_creatinine_clearance, 3),
-                'beta2m_clearance': round(total_beta2m_clearance, 3),
-                'total_uf_small_pore': round(total_uf_small, 3),
-                'total_uf_ultrasmall_pore': round(total_uf_ultrasmall, 3),
-                'total_uf': round(total_uf_small + total_uf_ultrasmall, 3),
+                'creatinine_clearance': round(float(ode_results.get('creatinine_clearance', 0.0) or 0.0), 3),
+                'beta2m_clearance': round(float(ode_results.get('beta2m_clearance', 0.0) or 0.0), 3),
+                'total_uf_small_pore': round(float(ode_results.get('total_uf_small_pore', 0.0) or 0.0), 3),
+                'total_uf_ultrasmall_pore': round(float(ode_results.get('total_uf_ultrasmall_pore', 0.0) or 0.0), 3),
+                'total_uf': round(float(ode_results.get('total_uf', 0.0) or 0.0), 3),
                 'renal_ktv': renal['renal_ktv'],
                 'renal_creatinine_clearance_l_day': renal['renal_creatinine_clearance_l_day'],
-                'duration_total_min': round(current_time, 1),
-                'cycles': cycle_results,
-                'time_series': ts,
+                'duration_total_min': round(float(ode_results.get('duration_total_min', 0.0) or 0.0), 1),
+                'cycles': ode_results.get('cycles', []),
+                'time_series': ode_results.get('time_series', {}),
             },
         })
     except Exception as e:

@@ -8,6 +8,19 @@
     <div class="card">
       <div class="grid">
         <div class="field">
+          <label>头像</label>
+          <div class="avatar-editor">
+            <div v-if="profile.avatarUrl" class="avatar-preview">
+              <img :src="profile.avatarUrl" alt="医生头像" />
+            </div>
+            <div v-else class="avatar-placeholder">无头像</div>
+            <div class="avatar-actions">
+              <input type="file" accept="image/png,image/jpeg,image/webp" @change="onAvatarChange" />
+              <button class="btn ghost btn-avatar-clear" type="button" @click="clearAvatar">移除头像</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
           <label>姓名</label>
           <input v-model.trim="profile.name" placeholder="例如：王医生" />
         </div>
@@ -66,6 +79,7 @@ const groups = ref([])
 
 const baseProfile = () => ({
   name: '',
+  avatarUrl: '',
   org: '',
   phone: '',
   note: '',
@@ -103,6 +117,9 @@ const profile = reactive(baseProfile())
 const persistLocal = () => {
   try {
     localStorage.setItem(profileStorageKey(), JSON.stringify(profile))
+    localStorage.setItem('pd_display_name', profile.name || localStorage.getItem('pd_username') || '用户')
+    localStorage.setItem('pd_avatar_url', profile.avatarUrl || '')
+    window.dispatchEvent(new CustomEvent('pd-user-updated'))
     if (localStorage.getItem(LEGACY_KEY)) localStorage.removeItem(LEGACY_KEY)
   } catch (e) {
     console.error(e)
@@ -157,6 +174,7 @@ const save = async () => {
         },
         body: JSON.stringify({
           display_name: profile.name || null,
+          avatar_url: profile.avatarUrl || null,
           org: profile.org,
           hospital_id: profile.hospitalId || null,
           medical_group_id: profile.medicalGroupId || null,
@@ -174,6 +192,7 @@ const save = async () => {
 const reset = () => {
   const next = load()
   profile.name = next.name
+  profile.avatarUrl = next.avatarUrl || ''
   profile.org = next.org
   profile.phone = next.phone
   profile.note = next.note
@@ -185,6 +204,7 @@ const reset = () => {
 const applyServerUser = (user) => {
   if (!user) return
   if (user.display_name != null) profile.name = user.display_name || ''
+  if (user.avatar_url != null) profile.avatarUrl = user.avatar_url || ''
   if (user.org != null) profile.org = user.org || ''
   profile.allowSharePatients = !!user.allow_share_patients
   profile.hospitalId = user.hospital_id || 0
@@ -207,6 +227,32 @@ const syncFromServer = async () => {
     console.error(e)
   }
   return false
+}
+
+const onAvatarChange = (e) => {
+  const file = e?.target?.files?.[0]
+  if (!file) return
+  if (!file.type?.startsWith('image/')) {
+    showToast('请上传图片文件', 'info')
+    return
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    showToast('头像图片请小于 2MB', 'info')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = typeof reader.result === 'string' ? reader.result : ''
+    if (!result) return
+    profile.avatarUrl = result
+    persistLocal()
+  }
+  reader.readAsDataURL(file)
+}
+
+const clearAvatar = () => {
+  profile.avatarUrl = ''
+  persistLocal()
 }
 
 onMounted(async () => {
@@ -285,6 +331,39 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-preview,
+.avatar-placeholder {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  font-size: 12px;
+  color: rgba(31, 35, 64, 0.6);
+}
+.avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.btn-avatar-clear {
+  padding: 8px 10px;
+  font-size: 12px;
 }
 label {
   font-size: 13px;

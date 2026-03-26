@@ -23,7 +23,10 @@
 
       <div class="sidebar-footer">
         <div class="user-card" @click="goProfile">
-          <div class="avatar">{{ avatarInitial }}</div>
+          <div v-if="avatarUrl" class="avatar avatar-image">
+            <img :src="avatarUrl" alt="医生头像" />
+          </div>
+          <div v-else class="avatar">{{ avatarInitial }}</div>
           <div class="user-text">
             <div class="user-name">{{ displayName }}</div>
             <div class="user-link">查看个人信息</div>
@@ -41,13 +44,53 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 
 const router = useRouter()
 
-const rawName = localStorage.getItem('pd_username') || '用户'
-const avatarInitial = rawName.slice(0, 1).toUpperCase()
-const displayName = rawName
+const API_BASE = 'http://localhost:5000/api'
+const displayNameRef = ref(localStorage.getItem('pd_display_name') || localStorage.getItem('pd_username') || '用户')
+const avatarUrl = ref(localStorage.getItem('pd_avatar_url') || '')
+const avatarInitial = computed(() => (displayNameRef.value || '用户').slice(0, 1).toUpperCase())
+const displayName = computed(() => displayNameRef.value || '用户')
+
+const applyLocalProfile = () => {
+  displayNameRef.value = localStorage.getItem('pd_display_name') || localStorage.getItem('pd_username') || '用户'
+  avatarUrl.value = localStorage.getItem('pd_avatar_url') || ''
+}
+
+const syncUserInfo = async () => {
+  const token = localStorage.getItem('pd_token')
+  if (!token) return
+  try {
+    const resp = await fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    const data = await resp.json().catch(() => ({}))
+    if (!data.success || !data.user) return
+    const nextName = data.user.display_name || data.user.username || '用户'
+    const nextAvatar = data.user.avatar_url || ''
+    localStorage.setItem('pd_display_name', nextName)
+    localStorage.setItem('pd_avatar_url', nextAvatar)
+    if (data.user.id != null) localStorage.setItem('pd_user_id', String(data.user.id))
+    if (data.user.username) localStorage.setItem('pd_username', data.user.username)
+    applyLocalProfile()
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const onUserUpdated = () => {
+  applyLocalProfile()
+}
+
+onMounted(() => {
+  applyLocalProfile()
+  syncUserInfo()
+  window.addEventListener('pd-user-updated', onUserUpdated)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pd-user-updated', onUserUpdated)
+})
 
 const goProfile = () => {
   router.push('/app/user')
@@ -57,6 +100,8 @@ const logout = () => {
   localStorage.removeItem('pd_token')
   localStorage.removeItem('pd_username')
   localStorage.removeItem('pd_user_id')
+  localStorage.removeItem('pd_display_name')
+  localStorage.removeItem('pd_avatar_url')
   router.push('/login')
 }
 </script>
@@ -158,6 +203,16 @@ const logout = () => {
   align-items: center;
   justify-content: center;
   font-weight: 900;
+}
+.avatar-image {
+  background: none;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+.avatar-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .user-text {
   display: flex;

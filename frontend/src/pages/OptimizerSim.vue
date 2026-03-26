@@ -242,6 +242,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import { showToast } from '../utils/toast'
+import { confirm } from '../utils/confirm'
 
 Chart.register(...registerables)
 
@@ -608,8 +609,8 @@ const resetTemplate = () => {
   phaseTemplate.value = defaultTemplate()
 }
 
-const clearRounds = () => {
-  if (!window.confirm('确定清空所有轮次记录吗？')) return
+const clearRounds = async () => {
+  if (!(await confirm('确定清空所有轮次记录吗？', { title: '清空确认' }))) return
   rounds.value = []
   persistRounds()
   renderHistoryChart()
